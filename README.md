@@ -73,19 +73,7 @@ For this optional full rebuild, include these in `data/raw/`:
 - `variable_mapping_DP05.csv`
 - `variable_mapping_S1701.csv`
 
-## Publish to GitHub
-
-After data is excluded via `.gitignore`:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin <your-repo-url>
-git push -u origin main
-```
 
 ## Notes
 
-- The active pipeline uses `cleaning/` and `analysis/` (not legacy `R/` paths).
+- To be updated as necessary. 
