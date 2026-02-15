@@ -7,7 +7,7 @@ This repository runs the openings/closures data pipeline and analysis from:
 
 `archive/` is backup-only and is not part of the active pipeline.
 
-## Repository Setup (Option A: data hosted externally)
+## Repository Setup (Data hosted externally)
 
 This repo is configured to keep large datasets out of Git.  
 Place data from your Dropbox (or other storage) into:
