@@ -1,0 +1,21 @@
+# OS / editor metadata
+.DS_Store
+._*
+
+# Local R session/cache artifacts
+.Rhistory
+.Rlibs/
+.RData
+.Ruserdata
+
+# Backup/archive content not used by pipeline
+archive/
+
+# Project outputs (regenerate from pipeline)
+outputs/
+
+# Data strategy for GitHub (Option A: host data externally)
+data/
+
+# Keep optional placeholder files if you add them
+!data/**/.gitkeep
