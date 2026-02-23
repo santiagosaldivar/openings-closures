@@ -70,7 +70,8 @@ stage_urban_rural_activity <- function(
       )
     ) %>%
     group_by(event_year, ruca_grouped, event_type) %>%
-    summarise(count = n(), .groups = "drop")
+    summarise(count = n(), .groups = "drop") %>%
+    complete(event_year, ruca_grouped, event_type, fill = list(count = 0))
 
   p_combined <- ggplot(
     event_processed,
@@ -86,10 +87,13 @@ stage_urban_rural_activity <- function(
       color = "Urbanicity",
       linetype = "Event Type"
     ) +
-    theme_minimal(base_size = 16) +
+    theme_minimal(base_family = "Times New Roman", base_size = 24) +
     theme(
       legend.position = "bottom",
-      legend.box = "vertical"
+      legend.box = "vertical",
+      legend.margin = margin(t = 0),
+      legend.title = element_text(face = "bold", size = 22),
+      legend.text = element_text(size = 21)
     )
 
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)

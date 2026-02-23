@@ -158,8 +158,7 @@ run_kw_final_table <- function(
 
   percentile_cols <- c(
     "income_percentile", "health_insurance_percentile", "public_health_insurance_percentile",
-    "unemployment_rate_percentile", "bachelors_percentile", "black_percentile",
-    "latino_percentile", "poverty_percentile", "SDI_percentile",
+    "unemployment_rate_percentile", "bachelors_percentile", "poverty_percentile", "SDI_percentile",
     "population_density_percentile", "pop_change_pct_percentile"
   )
 
@@ -169,8 +168,6 @@ run_kw_final_table <- function(
     public_health_insurance_percentile = "Public health insurance (%)",
     unemployment_rate_percentile = "Unemployment rate (%)",
     bachelors_percentile = "Bachelor's degree (%)",
-    black_percentile = "Black (%)",
-    latino_percentile = "Hispanic/Latino (%)",
     poverty_percentile = "Below poverty line (%)",
     SDI_percentile = "Social deprivation index",
     population_density_percentile = "Population density",
@@ -232,31 +229,137 @@ run_kw_final_table <- function(
       test_4, test_3, test_2
     )
 
-  gt_table <- formatted %>%
-    gt() %>%
-    tab_header(title = "Sample Descriptives Using Kruskal-Wallis Test") %>%
-    tab_spanner(label = "Closure", columns = c(N_Closure, Mean_Closure)) %>%
-    tab_spanner(label = "Opening", columns = c(N_Opening, Mean_Opening)) %>%
-    tab_spanner(label = "Test 2", columns = test_2) %>%
-    tab_spanner(label = "Test 3", columns = test_3) %>%
-    tab_spanner(label = "Test 4", columns = test_4) %>%
-    cols_label(
-      `Demographic Variable` = "",
-      N_Closure = "N", Mean_Closure = "Mean",
-      N_Opening = "N", Mean_Opening = "Mean",
-      test_2 = "Test Statistic", test_3 = "Test Statistic", test_4 = "Test Statistic"
-    ) %>%
-    fmt_number(columns = c(Mean_Closure, Mean_Opening), decimals = 2) %>%
-    fmt_number(columns = c(N_Closure, N_Opening), decimals = 0) %>%
-    tab_footnote(
-      footnote = "**p < .01; *p < .05.",
-      locations = cells_column_labels(columns = c(test_2, test_3, test_4))
-    ) %>%
-    cols_align(align = "center", columns = -`Demographic Variable`)
-
   dir.create(out_table_dir, recursive = TRUE, showWarnings = FALSE)
-  gtsave(gt_table, file.path(out_table_dir, "brief_summary_table.tex"))
-  invisible(gt_table)
+
+  row_spec <- tibble::tribble(
+    ~Category, ~`Demographic Variable`, ~row_order,
+    "Socioeconomic Status", "Bachelor's degree (%)", 1L,
+    "Socioeconomic Status", "Median household income", 2L,
+    "Socioeconomic Status", "Below poverty line (%)", 3L,
+    "Socioeconomic Status", "Unemployment rate (%)", 4L,
+    "Socioeconomic Status", "Social deprivation index", 5L,
+    "Demographics", "Population density", 6L,
+    "Demographics", "Population change (%)", 7L,
+    "Insurance Coverage", "Any health insurance (%)", 8L,
+    "Insurance Coverage", "Public health insurance (%)", 9L
+  )
+
+  format_test_for_tex <- function(x) {
+    if (is.na(x)) return("")
+    if (grepl("\\*\\*$", x)) return(paste0(sub("\\*\\*$", "", x), "\\tnote{**}"))
+    if (grepl("\\*$", x)) return(paste0(sub("\\*$", "", x), "\\tnote{*}"))
+    x
+  }
+
+  table_for_tex <- row_spec %>%
+    left_join(formatted, by = "Demographic Variable") %>%
+    mutate(
+      display_var = gsub("%", "\\%", `Demographic Variable`, fixed = TRUE),
+      display_test_4 = vapply(test_4, format_test_for_tex, character(1)),
+      display_test_3 = vapply(test_3, format_test_for_tex, character(1)),
+      display_test_2 = vapply(test_2, format_test_for_tex, character(1))
+    )
+
+  section_order <- c("Socioeconomic Status", "Demographics", "Insurance Coverage")
+  section_lines <- c()
+  for (idx in seq_along(section_order)) {
+    section <- section_order[[idx]]
+    rows <- table_for_tex %>%
+      filter(Category == section) %>%
+      arrange(row_order)
+
+    section_lines <- c(
+      section_lines,
+      sprintf("    \\multicolumn{8}{l}{\\textbf{%s}} \\\\", section),
+      vapply(
+        seq_len(nrow(rows)),
+        function(i) {
+          sprintf(
+            paste0(
+              "    \\hspace{3mm} %s & %d & %.2f & \\multicolumn{1}{c}{%s}",
+              " & %d & %.2f & \\multicolumn{1}{c}{%s} & \\multicolumn{1}{c}{%s} \\\\"
+            ),
+            rows$display_var[[i]],
+            as.integer(rows$N_Closure[[i]]), rows$Mean_Closure[[i]], rows$display_test_4[[i]],
+            as.integer(rows$N_Opening[[i]]), rows$Mean_Opening[[i]], rows$display_test_3[[i]],
+            rows$display_test_2[[i]]
+          )
+        },
+        character(1)
+      )
+    )
+
+    if (idx < length(section_order)) {
+      section_lines <- c(section_lines, "    \\addlinespace", "")
+    }
+  }
+
+  tex_body <- c(
+    "% Requires: booktabs, siunitx, threeparttable, caption, array",
+    "\\centering",
+    "",
+    "\\begin{threeparttable}",
+    "    \\setcounter{table}{2}",
+    "    \\captionof{table}{HSA-Level Community Characteristics: Comparison of Percentile Rank Distributions}",
+    "",
+    "    \\begin{tabular}{",
+    "        l",
+    "        S[table-format=3.0] S[table-format=2.2]",
+    "        c",
+    "        S[table-format=3.0] S[table-format=2.2]",
+    "        c",
+    "        c",
+    "    }",
+    "    \\toprule",
+    "",
+    "    & \\multicolumn{2}{c}{Closures}",
+    "    & \\multicolumn{1}{c}{Closures vs.}",
+    "    & \\multicolumn{2}{c}{Openings}",
+    "    & \\multicolumn{1}{c}{Openings vs.}",
+    "    & \\multicolumn{1}{c}{Openings vs.} \\\\",
+    "",
+    "    & \\multicolumn{2}{c}{(Event)}",
+    "    & \\multicolumn{1}{c}{Non-Event}",
+    "    & \\multicolumn{2}{c}{(Event)}",
+    "    & \\multicolumn{1}{c}{Non-Event}",
+    "    & \\multicolumn{1}{c}{Closures} \\\\",
+    "",
+    "    \\cmidrule(lr){2-3} \\cmidrule(lr){4-4} \\cmidrule(lr){5-6} \\cmidrule(lr){7-7} \\cmidrule(lr){8-8}",
+    "",
+    "     & {N} & {Mean} & {($\\chi^2$)} & {N} & {Mean} & {($\\chi^2$)} & {($\\chi^2$)} \\\\",
+    "    \\midrule",
+    "",
+    section_lines,
+    "",
+    "    \\bottomrule",
+    "    \\end{tabular}",
+    "",
+    "    \\begin{tablenotes}",
+    "        \\small",
+    "        \\item \\textit{Significance:} **p $<$ .01; *p $<$ .05.",
+    "        \\item \\textit{Note:} This table reports average percentile ranks for Hospital Service Area (HSA) community characteristics. All variables are expressed as within-year percentile ranks ($0-100$). The \"Mean\" columns represent the average percentile rank within each category. $\\chi^2$ statistics and associated p-values are derived from Kruskal-Wallis tests evaluating differences in the distributions across groups.",
+    "    \\end{tablenotes}",
+    "\\end{threeparttable}"
+  )
+
+  tex_standalone <- c(
+    "\\documentclass[varwidth=15in, border=10pt]{standalone}",
+    "\\usepackage{booktabs}",
+    "\\usepackage{siunitx}",
+    "\\usepackage{threeparttable}",
+    "\\usepackage{caption}",
+    "\\renewcommand{\\tablename}{Exhibit}",
+    "\\usepackage{array}",
+    "",
+    "\\begin{document}",
+    tex_body,
+    "",
+    "\\end{document}"
+  )
+
+  writeLines(tex_body, file.path(out_table_dir, "brief_summary_table.tex"))
+  writeLines(tex_standalone, file.path(out_table_dir, "brief_summary_table_standalone.tex"))
+  invisible(table_for_tex)
 }
 
 #' Appendix tables: 2016 quantiles and longitudinal medians
