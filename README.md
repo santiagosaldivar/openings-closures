@@ -1,8 +1,4 @@
----
-output:
-  html_document: default
-  pdf_document: default
----
+
 # Open/Close Hospital Pipeline
 
 This repository runs the openings/closures data pipeline and analysis from:
