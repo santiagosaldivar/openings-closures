@@ -4,6 +4,7 @@
 suppressPackageStartupMessages({
   library(dplyr)
   library(readr)
+  library(stringr)
 })
 
 resolve_input_path <- function(primary_path, label) {
@@ -87,6 +88,7 @@ stage_openclose_percentiles <- function(
     "weighted_percent_hispanic_or_latino_event",
     "weighted_percent_below_poverty_line_event",
     "weighted_SDI_score_event",
+    "certbeds_per_1000_residents_lag1",
     "population_density",
     "pop_change_pct"
   )
@@ -141,7 +143,8 @@ stage_openclose_percentiles <- function(
       black_percentile = weighted_percent_black_event_percentile,
       latino_percentile = weighted_percent_hispanic_or_latino_event_percentile,
       poverty_percentile = weighted_percent_below_poverty_line_event_percentile,
-      SDI_percentile = weighted_SDI_score_event_percentile
+      SDI_percentile = weighted_SDI_score_event_percentile,
+      certbeds_per_1000_residents_percentile = certbeds_per_1000_residents_lag1_percentile
     )
 
   dir.create(interim_dir, recursive = TRUE, showWarnings = FALSE)

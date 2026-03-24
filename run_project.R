@@ -113,6 +113,18 @@ if (exists("create_national_distribution_tables")) {
   message("Skipping national distribution tables (create_national_distribution_tables() not found).")
 }
 
+if (exists("build_premerge_event_counts_tables")) {
+  message("Building pre-merge event count appendix tables...")
+  build_premerge_event_counts_tables(
+    openings_path = "data/interim/openings_clean.csv",
+    closures_path = "data/interim/closures_clean.csv",
+    out_counts_tex = "outputs/tables/premerge_event_counts.tex",
+    out_ruca_tex = "outputs/tables/premerge_event_counts_by_ruca.tex"
+  )
+} else {
+  message("Skipping pre-merge event count appendix tables (build_premerge_event_counts_tables() not found).")
+}
+
 if (exists("run_hospital_characteristics")) {
   message("Building hospital characteristics table...")
   run_hospital_characteristics(

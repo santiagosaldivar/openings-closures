@@ -24,30 +24,34 @@ create_national_distribution_tables <- function(
   ntl_hsa_percentiles <- read_csv(input_csv, show_col_types = FALSE)
 
   national_distribution <- ntl_hsa_percentiles %>%
-    rename(
-      income = weighted_median_household_income_event,
-      insurance_any = weighted_percent_any_health_insur_event,
-      insurance_public = weighted_percent_public_health_insur_event,
-      unemployment = weighted_unemployment_rate_event,
-      bachelors_degree = weighted_percent_bachelors_event,
-      black = weighted_percent_black_event,
-      hispanic_latino = weighted_percent_hispanic_or_latino_event,
-      poverty = weighted_percent_below_poverty_line_event,
-      SDI = weighted_SDI_score_event
+    transmute(
+      year,
+      `Median household income` = weighted_median_household_income_event,
+      `Any health insurance (%)` = weighted_percent_any_health_insur_event,
+      `Public health insurance (%)` = weighted_percent_public_health_insur_event,
+      `Unemployment rate (%)` = weighted_unemployment_rate_event,
+      `Bachelor's degree (%)` = weighted_percent_bachelors_event,
+      `Black population (%)` = weighted_percent_black_event,
+      `Hispanic or Latino population (%)` = weighted_percent_hispanic_or_latino_event,
+      `Below poverty line (%)` = weighted_percent_below_poverty_line_event,
+      `Social deprivation index` = weighted_SDI_score_event,
+      `Certified beds per 1,000 residents` = certbeds_per_1000_residents_lag1
     )
 
-  demographic_vars <- c(
-    "income", "insurance_any", "insurance_public", "unemployment",
-    "bachelors_degree", "black", "hispanic_latino", "poverty", "SDI"
-  )
+  demographic_vars <- setdiff(names(national_distribution), "year")
   percentile_probs <- c(0.05, 0.25, 0.50, 0.75, 0.95)
   percentile_names <- c("5th", "25th", "50th", "75th", "95th")
+
+  safe_quantiles <- function(x) {
+    valid <- x[!is.na(x)]
+    if (length(valid) == 0) return(rep(NA_real_, length(percentile_probs)))
+    as.numeric(quantile(valid, probs = percentile_probs, na.rm = TRUE))
+  }
 
   create_percentile_table <- function(target_year, data) {
     data %>%
       filter(year == target_year) %>%
-      reframe(across(all_of(demographic_vars),
-                     ~ quantile(., probs = percentile_probs, na.rm = TRUE))) %>%
+      reframe(across(all_of(demographic_vars), safe_quantiles)) %>%
       mutate(percentile = percentile_names) %>%
       pivot_longer(
         cols = -percentile,
