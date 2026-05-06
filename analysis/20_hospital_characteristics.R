@@ -53,7 +53,7 @@ run_hospital_characteristics <- function(
 
   pos_panel_updated <- merge(pos_panel_updated, openings, by.x = c("ccn", "year"), by.y = c("ccn", "part_year"), all.x = TRUE)
   pos_panel_updated <- merge(pos_panel_updated, closures, by.x = c("ccn", "year"), by.y = c("ccn", "term_year"), all.x = TRUE)
-
+# CHECK THE LINE BELOW
   panel_wo_events <- subset(
     pos_panel_updated,
     (opening != 1 | is.na(opening)) & (closure != 1 | is.na(closure) & beds > 1)

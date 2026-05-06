@@ -15,6 +15,203 @@ suppressPackageStartupMessages({
   library(patchwork)
 })
 
+mode_value <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA_character_)
+  tab <- sort(table(x), decreasing = TRUE)
+  names(tab)[1]
+}
+
+load_ruca_lookup <- function(ruca_file) {
+  readxl::read_excel(ruca_file, sheet = "Data") %>%
+    transmute(
+      zip5 = str_pad(as.character(ZIP_CODE), width = 5, side = "left", pad = "0"),
+      ruca_simple = case_when(
+        RUCA1 %in% c(1, 2, 3) ~ "Metropolitan",
+        RUCA1 %in% c(4, 5, 6) ~ "Micropolitan",
+        RUCA1 %in% c(7, 8, 9) ~ "Small Town",
+        RUCA1 == 10 ~ "Rural",
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    mutate(
+      ruca_grouped = case_when(
+        ruca_simple %in% c("Rural", "Small Town") ~ "Rural & Small Town",
+        TRUE ~ ruca_simple
+      )
+    ) %>%
+    distinct(zip5, ruca_grouped)
+}
+
+load_zip_hsa_lookup <- function(crosswalk_file) {
+  read_csv(crosswalk_file, show_col_types = FALSE) %>%
+    transmute(
+      zip5 = str_pad(as.character(zipcode19), width = 5, side = "left", pad = "0"),
+      hsanum = as.integer(hsanum)
+    ) %>%
+    distinct()
+}
+
+load_zip_year_population <- function(
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
+) {
+  zip_zcta <- readxl::read_excel(zip_zcta_file) %>%
+    transmute(
+      zip5 = str_pad(as.character(ZIP_CODE), width = 5, side = "left", pad = "0"),
+      zcta = str_pad(as.character(zcta), width = 5, side = "left", pad = "0")
+    ) %>%
+    distinct(zip5, zcta)
+
+  read_b01003 <- function(year_value) {
+    file_path <- file.path(
+      census_root,
+      "B01003",
+      paste0("B01003_", year_value),
+      paste0("ACSDT5Y", year_value, ".B01003-Data.csv")
+    )
+    read_csv(file_path, show_col_types = FALSE, progress = FALSE) %>%
+      transmute(
+        zcta = str_extract(NAME, "(?<=ZCTA5\\s)\\d+"),
+        total_pop = suppressWarnings(as.numeric(gsub(",", "", B01003_001E)))
+      ) %>%
+      filter(!is.na(zcta)) %>%
+      mutate(
+        year = as.integer(year_value),
+        zcta = str_pad(zcta, width = 5, side = "left", pad = "0")
+      )
+  }
+
+  b01003_years <- 2011:2023
+  bind_rows(lapply(b01003_years, read_b01003)) %>%
+    left_join(zip_zcta, by = "zcta", relationship = "many-to-many") %>%
+    filter(!is.na(zip5)) %>%
+    select(zip5, year, total_pop) %>%
+    distinct()
+}
+
+build_hsa_panel_assignment <- function(
+  df_all,
+  crosswalk_file,
+  ruca_file,
+  method = c("event_zip", "hsa_zip_count", "hsa_population_weighted"),
+  openings_file = "data/raw/updated_openings_august2025.csv",
+  closures_file = "data/raw/updated_closures_august2025.csv",
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
+) {
+  method <- match.arg(method)
+  zip_hsa <- load_zip_hsa_lookup(crosswalk_file)
+  ruca <- load_ruca_lookup(ruca_file)
+
+  if (method == "event_zip") {
+    openings_events <- read_csv(openings_file, show_col_types = FALSE) %>%
+      transmute(
+        zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
+        year = as.integer(part_year),
+        group = "Opening"
+      ) %>%
+      filter(year >= 2010, !is.na(year))
+
+    closures_events <- read_csv(closures_file, show_col_types = FALSE) %>%
+      transmute(
+        zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
+        year = as.integer(term_year),
+        group = "Closure"
+      ) %>%
+      filter(year >= 2010, !is.na(year))
+
+    event_class <- bind_rows(openings_events, closures_events) %>%
+      left_join(zip_hsa, by = "zip5") %>%
+      left_join(ruca, by = "zip5") %>%
+      group_by(hsanum, year, group) %>%
+      summarise(ruca_grouped = mode_value(ruca_grouped), .groups = "drop")
+
+    hsa_ruca <- zip_hsa %>%
+      left_join(ruca, by = "zip5") %>%
+      group_by(hsanum) %>%
+      summarise(ruca_grouped_hsa = mode_value(ruca_grouped), .groups = "drop")
+
+    return(
+      df_all %>%
+        left_join(event_class, by = c("hsanum", "year", "group")) %>%
+        left_join(hsa_ruca, by = "hsanum") %>%
+        mutate(
+          ruca_grouped = if_else(
+            as.character(group) == "non-event" & is.na(ruca_grouped),
+            ruca_grouped_hsa,
+            ruca_grouped
+          )
+        ) %>%
+        select(-ruca_grouped_hsa)
+    )
+  }
+
+  if (method == "hsa_zip_count") {
+    hsa_ruca <- zip_hsa %>%
+      left_join(ruca, by = "zip5") %>%
+      group_by(hsanum) %>%
+      summarise(ruca_grouped = mode_value(ruca_grouped), .groups = "drop")
+
+    return(df_all %>% left_join(hsa_ruca, by = "hsanum"))
+  }
+
+  zip_year_pop <- load_zip_year_population(
+    zip_zcta_file = zip_zcta_file,
+    census_root = census_root
+  )
+
+  zip_year_pop <- bind_rows(
+    zip_year_pop,
+    zip_year_pop %>%
+      filter(year == 2011L) %>%
+      mutate(year = 2010L)
+  ) %>%
+    distinct(zip5, year, .keep_all = TRUE)
+
+  years_to_assign <- df_all %>%
+    distinct(year) %>%
+    filter(!is.na(year))
+
+  hsa_ruca <- years_to_assign %>%
+    tidyr::crossing(zip_hsa) %>%
+    left_join(ruca, by = "zip5") %>%
+    left_join(zip_year_pop, by = c("zip5", "year")) %>%
+    filter(!is.na(ruca_grouped)) %>%
+    group_by(hsanum, year, ruca_grouped) %>%
+    summarise(
+      total_pop = sum(total_pop, na.rm = TRUE),
+      zip_count = n(),
+      .groups = "drop"
+    ) %>%
+    group_by(hsanum, year) %>%
+    arrange(desc(total_pop), desc(zip_count), ruca_grouped, .by_group = TRUE) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    select(hsanum, year, ruca_grouped)
+
+  df_all %>% left_join(hsa_ruca, by = c("hsanum", "year"))
+}
+
+panel_assignment_suffix <- function(method) {
+  dplyr::case_when(
+    method == "hsa_zip_count" ~ "_hsa_zip_count",
+    method == "hsa_population_weighted" ~ "_hsa_population_weighted",
+    TRUE ~ ""
+  )
+}
+
+panel_assignment_note <- function(method) {
+  dplyr::case_when(
+    method == "hsa_zip_count" ~ "Urban/rural panel assignment is based on the plurality RUCA category among ZIP codes within each HSA.",
+    method == "hsa_population_weighted" ~ paste(
+      "Urban/rural panel assignment is based on the plurality RUCA category among ZIP codes within each HSA, weighted by ZIP-level population.",
+      "For 2010, 2011 ZIP populations are used because the ZIP-level population series begins in 2011."
+    ),
+    TRUE ~ "Urban event rows are classified using event ZIP codes, while non-event rows use modal HSA RUCA assignment."
+  )
+}
+
 #' Create percentile histograms, violins, and a 3-panel violin figure.
 #'
 #' @param input_csv path to percentile dataset
@@ -25,17 +222,25 @@ run_percentile_plots <- function(
   openings_file = "data/raw/updated_openings_august2025.csv",
   closures_file = "data/raw/updated_closures_august2025.csv",
   crosswalk_file = "data/raw/ZipHsaHrr.csv",
-  ruca_file = "data/raw/RUCA2010zipcode.xlsx"
+  ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+  panel_assignment = c("event_zip", "hsa_zip_count", "hsa_population_weighted"),
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
 ) {
-  mode_value <- function(x) {
-    x <- x[!is.na(x)]
-    if (length(x) == 0) return(NA_character_)
-    tab <- sort(table(x), decreasing = TRUE)
-    names(tab)[1]
-  }
+  panel_assignment <- match.arg(panel_assignment)
 
   df_all <- read_csv(input_csv, show_col_types = FALSE) %>%
     mutate(group = factor(group, levels = c("Opening", "Closure", "non-event")))
+  df_all <- build_hsa_panel_assignment(
+    df_all = df_all,
+    crosswalk_file = crosswalk_file,
+    ruca_file = ruca_file,
+    method = panel_assignment,
+    openings_file = openings_file,
+    closures_file = closures_file,
+    zip_zcta_file = zip_zcta_file,
+    census_root = census_root
+  )
   df_openings_closures <- df_all %>%
     filter(group %in% c("Opening", "Closure")) %>%
     mutate(group = factor(as.character(group), levels = c("Opening", "Closure")))
@@ -108,57 +313,6 @@ run_percentile_plots <- function(
     }
     p
   }
-
-  openings_events <- read_csv(openings_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
-      year = as.integer(part_year),
-      group = "Opening"
-    ) %>%
-    filter(year >= 2010, !is.na(year))
-
-  closures_events <- read_csv(closures_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
-      year = as.integer(term_year),
-      group = "Closure"
-    ) %>%
-    filter(year >= 2010, !is.na(year))
-
-  zip_hsa <- read_csv(crosswalk_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zipcode19), width = 5, side = "left", pad = "0"),
-      hsanum = as.integer(hsanum)
-    ) %>%
-    distinct()
-
-  ruca <- readxl::read_excel(ruca_file, sheet = "Data") %>%
-    transmute(
-      zip5 = str_pad(as.character(ZIP_CODE), width = 5, side = "left", pad = "0"),
-      ruca_simple = case_when(
-        RUCA1 %in% c(1, 2, 3) ~ "Metropolitan",
-        RUCA1 %in% c(4, 5, 6) ~ "Micropolitan",
-        RUCA1 %in% c(7, 8, 9) ~ "Small Town",
-        RUCA1 == 10 ~ "Rural",
-        TRUE ~ NA_character_
-      )
-    ) %>%
-    mutate(
-      ruca_grouped = case_when(
-        ruca_simple %in% c("Rural", "Small Town") ~ "Rural & Small Town",
-        TRUE ~ ruca_simple
-      )
-    ) %>%
-    distinct(zip5, ruca_grouped)
-
-  event_class <- bind_rows(openings_events, closures_events) %>%
-    left_join(zip_hsa, by = "zip5") %>%
-    left_join(ruca, by = "zip5") %>%
-    group_by(hsanum, year, group) %>%
-    summarise(ruca_grouped = mode_value(ruca_grouped), .groups = "drop")
-
-  df_openings_closures <- df_openings_closures %>%
-    left_join(event_class, by = c("hsanum", "year", "group"))
 
   # Individual histograms and violins
   walk(percentile_vars, function(var_name) {
@@ -319,10 +473,24 @@ run_kw_final_table <- function(
   openings_file = "data/raw/updated_openings_august2025.csv",
   closures_file = "data/raw/updated_closures_august2025.csv",
   crosswalk_file = "data/raw/ZipHsaHrr.csv",
-  ruca_file = "data/raw/RUCA2010zipcode.xlsx"
+  ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+  panel_assignment = c("event_zip", "hsa_zip_count", "hsa_population_weighted"),
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
 ) {
+  panel_assignment <- match.arg(panel_assignment)
   df_all <- read_csv(input_csv, show_col_types = FALSE) %>%
     mutate(group = factor(group, levels = c("Opening", "Closure", "non-event")))
+  df_all <- build_hsa_panel_assignment(
+    df_all = df_all,
+    crosswalk_file = crosswalk_file,
+    ruca_file = ruca_file,
+    method = panel_assignment,
+    openings_file = openings_file,
+    closures_file = closures_file,
+    zip_zcta_file = zip_zcta_file,
+    census_root = census_root
+  )
 
   percentile_cols <- c(
     "income_percentile", "health_insurance_percentile", "public_health_insurance_percentile",
@@ -357,13 +525,6 @@ run_kw_final_table <- function(
     "Insurance Coverage", "Public health insurance (%)", 10L
   )
 
-  mode_value <- function(x) {
-    x <- x[!is.na(x)]
-    if (length(x) == 0) return(NA_character_)
-    tab <- sort(table(x), decreasing = TRUE)
-    names(tab)[1]
-  }
-
   p_stars <- function(p) {
     if (is.na(p)) return("")
     if (p < 0.001) return("***")
@@ -379,71 +540,6 @@ run_kw_final_table <- function(
     if (length(x2) == 0 || length(unique(g2)) < 2) return(NA_real_)
     tryCatch(kruskal.test(x = x2, g = factor(g2))$p.value, error = function(e) NA_real_)
   }
-
-  openings_events <- read_csv(openings_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
-      year = as.integer(part_year),
-      group = "Opening"
-    ) %>%
-    filter(year >= 2010, !is.na(year))
-
-  closures_events <- read_csv(closures_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zip5), width = 5, side = "left", pad = "0"),
-      year = as.integer(term_year),
-      group = "Closure"
-    ) %>%
-    filter(year >= 2010, !is.na(year))
-
-  zip_hsa <- read_csv(crosswalk_file, show_col_types = FALSE) %>%
-    transmute(
-      zip5 = str_pad(as.character(zipcode19), width = 5, side = "left", pad = "0"),
-      hsanum = as.integer(hsanum)
-    ) %>%
-    distinct()
-
-  ruca <- readxl::read_excel(ruca_file, sheet = "Data") %>%
-    transmute(
-      zip5 = str_pad(as.character(ZIP_CODE), width = 5, side = "left", pad = "0"),
-      ruca_simple = case_when(
-        RUCA1 %in% c(1, 2, 3) ~ "Metropolitan",
-        RUCA1 %in% c(4, 5, 6) ~ "Micropolitan",
-        RUCA1 %in% c(7, 8, 9) ~ "Small Town",
-        RUCA1 == 10 ~ "Rural",
-        TRUE ~ NA_character_
-      )
-    ) %>%
-    mutate(
-      ruca_grouped = case_when(
-        ruca_simple %in% c("Rural", "Small Town") ~ "Rural & Small Town",
-        TRUE ~ ruca_simple
-      )
-    ) %>%
-    distinct(zip5, ruca_grouped)
-
-  event_class <- bind_rows(openings_events, closures_events) %>%
-    left_join(zip_hsa, by = "zip5") %>%
-    left_join(ruca, by = "zip5") %>%
-    group_by(hsanum, year, group) %>%
-    summarise(ruca_grouped = mode_value(ruca_grouped), .groups = "drop")
-
-  hsa_ruca <- zip_hsa %>%
-    left_join(ruca, by = "zip5") %>%
-    group_by(hsanum) %>%
-    summarise(ruca_grouped_hsa = mode_value(ruca_grouped), .groups = "drop")
-
-  df_all <- df_all %>%
-    left_join(event_class, by = c("hsanum", "year", "group")) %>%
-    left_join(hsa_ruca, by = "hsanum") %>%
-    mutate(
-      ruca_grouped = if_else(
-        as.character(group) == "non-event" & is.na(ruca_grouped),
-        ruca_grouped_hsa,
-        ruca_grouped
-      )
-    ) %>%
-    select(-ruca_grouped_hsa)
 
   panel_stats <- function(df_panel) {
     df_openings_closures <- df_panel %>% filter(group %in% c("Opening", "Closure"))
@@ -588,6 +684,7 @@ run_kw_final_table <- function(
     "      \\item \\textit{Note:} Entries in the Closures and Openings columns report the mean percentile for the event group. Stars appended to those values indicate the significance of the event-group versus non-event Kruskal-Wallis comparison for that variable within the panel.",
     "      \\item The Closures vs. Openings column reports the significance of the Kruskal-Wallis comparison of closure and opening percentile distributions within the panel. Across the table, * denotes p$<$0.05, ** denotes p$<$0.01, and *** denotes p$<$0.001; no stars indicate the comparison is not statistically significant.",
     "      \\item Urban is Metropolitan. Rural panel includes Rural and Small Town. Overall includes all records, including rows without RUCA matches. Sample sizes vary by variable; see the appendix for variable-specific N values by panel and group.",
+    sprintf("      \\item %s", panel_assignment_note(panel_assignment)),
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )
@@ -605,8 +702,9 @@ run_kw_final_table <- function(
   )
 
   dir.create(out_table_dir, recursive = TRUE, showWarnings = FALSE)
-  writeLines(tex_body, file.path(out_table_dir, "brief_summary_table.tex"))
-  writeLines(tex_standalone, file.path(out_table_dir, "brief_summary_table_standalone.tex"))
+  suffix <- panel_assignment_suffix(panel_assignment)
+  writeLines(tex_body, file.path(out_table_dir, paste0("brief_summary_table", suffix, ".tex")))
+  writeLines(tex_standalone, file.path(out_table_dir, paste0("brief_summary_table", suffix, "_standalone.tex")))
 
   counts_combined <- row_spec %>%
     left_join(
@@ -701,8 +799,8 @@ run_kw_final_table <- function(
     "\\end{document}"
   )
 
-  writeLines(counts_tex_body, file.path(out_table_dir, "brief_summary_table_variable_n.tex"))
-  writeLines(counts_tex_standalone, file.path(out_table_dir, "brief_summary_table_variable_n_standalone.tex"))
+  writeLines(counts_tex_body, file.path(out_table_dir, paste0("brief_summary_table_variable_n", suffix, ".tex")))
+  writeLines(counts_tex_standalone, file.path(out_table_dir, paste0("brief_summary_table_variable_n", suffix, "_standalone.tex")))
 
   invisible(list(
     overall = overall_tbl,
@@ -711,6 +809,265 @@ run_kw_final_table <- function(
     counts = counts_combined
   ))
 }
+
+#' Create a 3-panel forest-style percentile summary figure.
+#'
+#' @param input_csv path to percentile dataset
+#' @param out_fig_dir directory for figure outputs
+run_percentile_forest_plot <- function(
+  input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+  out_fig_dir = "outputs/figures/percentiles_hsa_zip_count",
+  openings_file = "data/raw/updated_openings_august2025.csv",
+  closures_file = "data/raw/updated_closures_august2025.csv",
+  crosswalk_file = "data/raw/ZipHsaHrr.csv",
+  ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+  panel_assignment = c("hsa_zip_count", "hsa_population_weighted"),
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
+) {
+  panel_assignment <- match.arg(panel_assignment)
+
+  percentile_cols <- c(
+    "income_percentile", "health_insurance_percentile", "public_health_insurance_percentile",
+    "unemployment_rate_percentile", "bachelors_percentile", "poverty_percentile", "SDI_percentile",
+    "certbeds_per_1000_residents_percentile", "population_density_percentile", "pop_change_pct_percentile"
+  )
+
+  pretty_names <- c(
+    income_percentile = "Median household income",
+    health_insurance_percentile = "Any health insurance (%)",
+    public_health_insurance_percentile = "Public health insurance (%)",
+    unemployment_rate_percentile = "Unemployment rate (%)",
+    bachelors_percentile = "Bachelor's degree (%)",
+    poverty_percentile = "Below poverty line (%)",
+    SDI_percentile = "Social deprivation index",
+    certbeds_per_1000_residents_percentile = "Certified beds per 1,000 residents",
+    population_density_percentile = "Population density",
+    pop_change_pct_percentile = "Population change (%)"
+  )
+
+  row_spec <- tibble::tribble(
+    ~Category, ~`Demographic Variable`, ~row_order,
+    "Socioeconomic Status", "Bachelor's degree (%)", 1L,
+    "Socioeconomic Status", "Median household income", 2L,
+    "Socioeconomic Status", "Below poverty line (%)", 3L,
+    "Socioeconomic Status", "Unemployment rate (%)", 4L,
+    "Socioeconomic Status", "Social deprivation index", 5L,
+    "Demographics", "Certified beds per 1,000 residents", 6L,
+    "Demographics", "Population density", 7L,
+    "Demographics", "Population change (%)", 8L,
+    "Insurance Coverage", "Any health insurance (%)", 9L,
+    "Insurance Coverage", "Public health insurance (%)", 10L
+  )
+
+  p_stars <- function(p) {
+    if (is.na(p)) return("")
+    if (p < 0.001) return("***")
+    if (p < 0.01) return("**")
+    if (p < 0.05) return("*")
+    ""
+  }
+
+  safe_kw_p <- function(x, g) {
+    ok <- !is.na(x) & !is.na(g)
+    x2 <- x[ok]
+    g2 <- as.character(g[ok])
+    if (length(x2) == 0 || length(unique(g2)) < 2) return(NA_real_)
+    tryCatch(kruskal.test(x = x2, g = factor(g2))$p.value, error = function(e) NA_real_)
+  }
+
+  ci_bounds <- function(x) {
+    x <- x[!is.na(x)]
+    n <- length(x)
+    mean_value <- if (n > 0) mean(x) else NA_real_
+    sd_value <- if (n > 1) sd(x) else NA_real_
+    se_value <- if (n > 1) sd_value / sqrt(n) else NA_real_
+    t_value <- if (n > 1) qt(0.975, df = n - 1) else NA_real_
+    moe <- if (n > 1) t_value * se_value else NA_real_
+    tibble::tibble(
+      n = n,
+      mean_value = mean_value,
+      ci_lower = if (n > 1) pmax(0, mean_value - moe) else NA_real_,
+      ci_upper = if (n > 1) pmin(100, mean_value + moe) else NA_real_
+    )
+  }
+
+  df_all <- read_csv(input_csv, show_col_types = FALSE) %>%
+    mutate(group = factor(group, levels = c("Opening", "Closure", "non-event")))
+  df_all <- build_hsa_panel_assignment(
+    df_all = df_all,
+    crosswalk_file = crosswalk_file,
+    ruca_file = ruca_file,
+    method = panel_assignment,
+    openings_file = openings_file,
+    closures_file = closures_file,
+    zip_zcta_file = zip_zcta_file,
+    census_root = census_root
+  )
+
+  panel_data <- bind_rows(
+    df_all %>% mutate(panel = "Overall"),
+    df_all %>% filter(ruca_grouped == "Metropolitan") %>% mutate(panel = "Urban"),
+    df_all %>% filter(ruca_grouped == "Rural & Small Town") %>% mutate(panel = "Rural & Small Town")
+  ) %>%
+    mutate(panel = factor(panel, levels = c("Overall", "Urban", "Rural & Small Town")))
+
+  event_summary <- panel_data %>%
+    filter(group %in% c("Opening", "Closure")) %>%
+    select(panel, group, all_of(percentile_cols)) %>%
+    pivot_longer(-c(panel, group), names_to = "Measure", values_to = "Value") %>%
+    group_by(panel, Measure, group) %>%
+    reframe(ci_bounds(Value)) %>%
+    ungroup() %>%
+    mutate(`Demographic Variable` = pretty_names[Measure]) %>%
+    left_join(row_spec, by = "Demographic Variable") %>%
+    mutate(
+      row_position = 11 - row_order,
+      y = row_position + if_else(as.character(group) == "Opening", 0.16, -0.16)
+    )
+
+  star_summary <- panel_data %>%
+    filter(group %in% c("Opening", "Closure")) %>%
+    select(panel, group, all_of(percentile_cols)) %>%
+    pivot_longer(-c(panel, group), names_to = "Measure", values_to = "Value") %>%
+    group_by(panel, Measure) %>%
+    summarise(
+      p_open_vs_close = safe_kw_p(Value, group),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      stars = vapply(p_open_vs_close, p_stars, character(1)),
+      `Demographic Variable` = pretty_names[Measure]
+    ) %>%
+    left_join(row_spec, by = "Demographic Variable") %>%
+    mutate(row_position = 11 - row_order)
+
+  star_header <- tibble::tibble(
+    panel = factor(c("Overall", "Urban", "Rural & Small Town"), levels = c("Overall", "Urban", "Rural & Small Town")),
+    x = 112,
+    y = 10.95,
+    label = "Open vs. Close"
+  )
+
+  note_text <- paste(
+    "Points show mean percentiles; horizontal lines show t-based 95% confidence intervals for mean percentiles.\n",
+    "Stars denote the Kruskal-Wallis significance level for the openings-versus-closures comparison within each panel.\n",
+    panel_assignment_note(panel_assignment)
+  )
+
+  palette_values <- c("Opening" = "#1BC9C9", "Closure" = "#D73027")
+  shape_values <- c("Opening" = 18, "Closure" = 16)
+  label_values <- rev(row_spec$`Demographic Variable`)
+  panel_file_stub <- c(
+    "Overall" = "overall",
+    "Urban" = "urban",
+    "Rural & Small Town" = "rural_small_town"
+  )
+
+  build_forest_plot <- function(panel_filter = NULL, include_caption = TRUE, include_legend = TRUE) {
+    plot_data <- event_summary
+    star_data <- star_summary
+    header_data <- star_header
+
+    if (!is.null(panel_filter)) {
+      plot_data <- plot_data %>% filter(as.character(panel) == panel_filter)
+      star_data <- star_data %>% filter(as.character(panel) == panel_filter)
+      header_data <- header_data %>% filter(as.character(panel) == panel_filter)
+    }
+
+    p <- ggplot(plot_data, aes(x = mean_value, y = y, color = group, shape = group)) +
+      geom_vline(xintercept = 50, linetype = "dashed", color = "gray45", linewidth = 0.5) +
+      geom_segment(aes(x = ci_lower, xend = ci_upper, yend = y), linewidth = 0.8, na.rm = TRUE) +
+      geom_point(size = 2.4, na.rm = TRUE) +
+      geom_text(
+        data = star_data,
+        aes(x = 112, y = row_position, label = stars),
+        inherit.aes = FALSE,
+        color = "black",
+        size = 4,
+        family = "Times"
+      ) +
+      geom_text(
+        data = header_data,
+        aes(x = x, y = y, label = label),
+        inherit.aes = FALSE,
+        color = "black",
+        size = 3.2,
+        fontface = "bold",
+        family = "Times"
+      ) +
+      scale_color_manual(values = palette_values, name = "") +
+      scale_shape_manual(values = shape_values, name = "") +
+      scale_x_continuous(
+        limits = c(0, 116),
+        breaks = c(0, 25, 50, 75, 100),
+        labels = c("0", "25", "50", "75", "100"),
+        expand = expansion(mult = c(0.01, 0.01))
+      ) +
+      scale_y_continuous(
+        breaks = 10:1,
+        labels = label_values,
+        limits = c(0.4, 11.2),
+        expand = expansion(mult = c(0, 0))
+      ) +
+      labs(
+        x = "Mean Within-Year Percentile",
+        y = NULL,
+        caption = if (include_caption) note_text else NULL
+      ) +
+      theme_minimal(base_size = 12) +
+      theme(
+        text = element_text(family = "Times"),
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        strip.background = element_rect(fill = "white", color = NA),
+        legend.position = if (include_legend) "top" else "none",
+        panel.grid.major.y = element_line(color = "gray88", linewidth = 0.35),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_line(color = "gray92", linewidth = 0.3),
+        strip.text = element_text(face = "bold", size = 12),
+        axis.text.y = element_text(hjust = 1),
+        plot.caption = element_text(hjust = 0, size = 9, margin = margin(t = 8)),
+        plot.margin = margin(12, 50, 12, 12)
+      )
+
+    if (is.null(panel_filter)) {
+      p <- p + facet_wrap(~ panel, ncol = 1)
+    } else {
+      p <- p + ggtitle(panel_filter) +
+        theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 14))
+    }
+
+    p
+  }
+
+  p <- build_forest_plot()
+
+  dir.create(out_fig_dir, recursive = TRUE, showWarnings = FALSE)
+  output_stub <- file.path(out_fig_dir, paste0("forest_plot_3panel", panel_assignment_suffix(panel_assignment)))
+  ggsave(paste0(output_stub, ".png"), p, width = 12, height = 14, dpi = 300)
+  ggsave(paste0(output_stub, ".pdf"), p, width = 12, height = 14)
+
+  for (panel_name in levels(panel_data$panel)) {
+    panel_plot <- build_forest_plot(
+      panel_filter = panel_name,
+      include_caption = FALSE,
+      include_legend = identical(panel_name, "Overall")
+    )
+    panel_stub <- file.path(
+      out_fig_dir,
+      paste0(
+        "forest_plot_",
+        panel_file_stub[[panel_name]],
+        panel_assignment_suffix(panel_assignment)
+      )
+    )
+    ggsave(paste0(panel_stub, ".png"), panel_plot, width = 12, height = 4.8, dpi = 300)
+  }
+
+  invisible(list(summary = event_summary, stars = star_summary, plot = p))
+}
+
 #' Appendix tables: 2016 quantiles and longitudinal medians
 run_appendix_tables <- function(
   input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",

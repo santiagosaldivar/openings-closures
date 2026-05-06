@@ -143,6 +143,33 @@ if (exists("run_percentile_plots")) {
     input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
     out_fig_dir = "outputs/figures/percentiles"
   )
+  message("Creating HSA ZIP-count plurality percentile histograms/violins...")
+  run_percentile_plots(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir = "outputs/figures/percentiles_hsa_zip_count",
+    panel_assignment = "hsa_zip_count"
+  )
+  message("Creating HSA population-weighted plurality percentile histograms/violins...")
+  run_percentile_plots(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir = "outputs/figures/percentiles_hsa_population_weighted",
+    panel_assignment = "hsa_population_weighted"
+  )
+}
+
+if (exists("run_percentile_forest_plot")) {
+  message("Creating HSA ZIP-count plurality forest-style percentile figure...")
+  run_percentile_forest_plot(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir = "outputs/figures/percentiles_hsa_zip_count",
+    panel_assignment = "hsa_zip_count"
+  )
+  message("Creating HSA population-weighted plurality forest-style percentile figure...")
+  run_percentile_forest_plot(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir = "outputs/figures/percentiles_hsa_population_weighted",
+    panel_assignment = "hsa_population_weighted"
+  )
 }
 
 if (exists("run_kw_final_table")) {
@@ -150,6 +177,18 @@ if (exists("run_kw_final_table")) {
   run_kw_final_table(
     input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
     out_table_dir = "outputs/tables"
+  )
+  message("Building HSA ZIP-count plurality Kruskal-Wallis summary table...")
+  run_kw_final_table(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_table_dir = "outputs/tables",
+    panel_assignment = "hsa_zip_count"
+  )
+  message("Building HSA population-weighted plurality Kruskal-Wallis summary table...")
+  run_kw_final_table(
+    input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_table_dir = "outputs/tables",
+    panel_assignment = "hsa_population_weighted"
   )
 }
 
