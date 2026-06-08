@@ -91,6 +91,9 @@ if (exists("stage_urban_rural_activity")) {
     openings_file = "data/raw/updated_openings_august2025.csv",
     closures_file = "data/raw/updated_closures_august2025.csv",
     ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+    census_root = "data/raw/census_raw_data",
     dest_dir = "outputs/figures"
   )
 } else {
@@ -107,7 +110,12 @@ if (exists("create_national_distribution_tables")) {
   create_national_distribution_tables(
     input_csv = "data/interim/ntl_hsa_percentiles.csv",
     years = c(2012, 2015, 2018, 2022),
-    out_dir = "outputs/tables"
+    out_dir = "outputs/tables",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+    zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+    census_root = "data/raw/census_raw_data",
+    panel_assignment = "hsa_population_weighted"
   )
 } else {
   message("Skipping national distribution tables (create_national_distribution_tables() not found).")
@@ -123,6 +131,26 @@ if (exists("build_premerge_event_counts_tables")) {
   )
 } else {
   message("Skipping pre-merge event count appendix tables (build_premerge_event_counts_tables() not found).")
+}
+
+if (exists("build_event_counts_by_census_region")) {
+  message("Building opening/closure counts by Census region and division...")
+  build_event_counts_by_census_region(
+    openings_path = "data/interim/openings_clean.csv",
+    closures_path = "data/interim/closures_clean.csv",
+    zip_hsa_path = "data/raw/ZipHsaHrr.csv",
+    census_region_path = "data/raw/census_division_crosswalk.csv",
+    out_csv = "outputs/tables/census_region/opening_closure_counts_by_census_region.csv",
+    out_plot = "outputs/figures/census_region/opening_closure_counts_by_census_region.png",
+    out_division_csv = "outputs/tables/census_region/opening_closure_counts_by_census_division.csv",
+    out_division_plot = "outputs/figures/census_region/opening_closure_counts_by_census_division.png",
+    out_plot_poster = "outputs/figures/census_region/opening_closure_counts_by_census_region_poster.png",
+    out_division_plot_poster = "outputs/figures/census_region/opening_closure_counts_by_census_division_poster.png",
+    out_plot_poster_hires = "outputs/figures/census_region/opening_closure_counts_by_census_region_poster_hires.png",
+    out_division_plot_poster_hires = "outputs/figures/census_region/opening_closure_counts_by_census_division_poster_hires.png"
+  )
+} else {
+  message("Skipping Census region opening/closure counts (build_event_counts_by_census_region() not found).")
 }
 
 if (exists("run_hospital_characteristics")) {

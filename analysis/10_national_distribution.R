@@ -8,6 +8,11 @@ suppressPackageStartupMessages({
   library(gt)
 })
 
+shared_helper_path <- "cleaning/00_shared_urbanicity_helpers.R"
+if (!exists("ocgh_attach_hsa_panel_assignment") && file.exists(shared_helper_path)) {
+  source(shared_helper_path, local = FALSE)
+}
+
 #' Build percentile tables for national HSA demographics
 #'
 #' @param input_csv Path to ntl_hsa_percentiles.csv (default "data/interim/ntl_hsa_percentiles.csv")
@@ -17,14 +22,28 @@ suppressPackageStartupMessages({
 create_national_distribution_tables <- function(
   input_csv = "data/interim/ntl_hsa_percentiles.csv",
   years = c(2012, 2015, 2018, 2022),
-  out_dir = "outputs/tables"
+  out_dir = "outputs/tables",
+  crosswalk_file = "data/raw/ZipHsaHrr.csv",
+  ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data",
+  panel_assignment = c("hsa_population_weighted", "hsa_zip_count")
 ) {
+  panel_assignment <- match.arg(panel_assignment)
   if (!file.exists(input_csv)) stop("Input CSV not found: ", input_csv)
 
-  ntl_hsa_percentiles <- read_csv(input_csv, show_col_types = FALSE)
+  ntl_hsa_percentiles <- read_csv(input_csv, show_col_types = FALSE) %>%
+    ocgh_attach_hsa_panel_assignment(
+      crosswalk_file = crosswalk_file,
+      ruca_file = ruca_file,
+      method = panel_assignment,
+      zip_zcta_file = zip_zcta_file,
+      census_root = census_root
+    )
 
   national_distribution <- ntl_hsa_percentiles %>%
     transmute(
+      geography_type = coalesce(geography_type, "Overall"),
       year,
       `Median household income` = weighted_median_household_income_event,
       `Any health insurance (%)` = weighted_percent_any_health_insur_event,
@@ -38,7 +57,8 @@ create_national_distribution_tables <- function(
       `Certified beds per 1,000 residents` = certbeds_per_1000_residents_lag1
     )
 
-  demographic_vars <- setdiff(names(national_distribution), "year")
+  demographic_vars <- setdiff(names(national_distribution), c("year", "geography_type"))
+  geography_levels <- c("Overall", "Urban", "Rural & Small Town")
   percentile_probs <- c(0.05, 0.25, 0.50, 0.75, 0.95)
   percentile_names <- c("5th", "25th", "50th", "75th", "95th")
 
@@ -48,8 +68,14 @@ create_national_distribution_tables <- function(
     as.numeric(quantile(valid, probs = percentile_probs, na.rm = TRUE))
   }
 
-  create_percentile_table <- function(target_year, data) {
-    data %>%
+  create_percentile_table <- function(target_year, data, geography_filter) {
+    geography_data <- if (geography_filter == "Overall") {
+      data
+    } else {
+      data %>% filter(geography_type == geography_filter)
+    }
+
+    geography_data %>%
       filter(year == target_year) %>%
       reframe(across(all_of(demographic_vars), safe_quantiles)) %>%
       mutate(percentile = percentile_names) %>%
@@ -66,29 +92,42 @@ create_national_distribution_tables <- function(
 
   tables <- list()
   for (yr in years) {
-    pct_df <- create_percentile_table(yr, national_distribution)
-    tab <- pct_df %>%
-      gt() %>%
-      tab_header(title = paste0("National Distribution of HSA Demographics for ", yr)) %>%
-      fmt_number(columns = everything(), rows = everything(), decimals = 2)
+    for (geography_name in geography_levels) {
+      pct_df <- create_percentile_table(yr, national_distribution, geography_name)
+      tab <- pct_df %>%
+        gt() %>%
+        tab_header(
+          title = paste0(
+            geography_name,
+            " National Distribution of HSA Community Characteristics for ",
+            yr
+          )
+        ) %>%
+        fmt_number(columns = everything(), rows = everything(), decimals = 2)
 
-    png_file <- file.path(out_dir, paste0("demographics_table_", yr, ".png"))
-    save_ok <- TRUE
-    tryCatch(
-      gtsave(tab, file = png_file),
-      error = function(e) {
-        save_ok <<- FALSE
-        message(
-          "PNG export failed for ", yr, " (", conditionMessage(e), "). ",
-          "Falling back to LaTeX."
-        )
+      geography_stub <- geography_name %>%
+        tolower() %>%
+        gsub("[^a-z0-9]+", "_", .) %>%
+        gsub("^_|_$", "", .)
+
+      png_file <- file.path(out_dir, paste0("demographics_table_", geography_stub, "_", yr, ".png"))
+      save_ok <- TRUE
+      tryCatch(
+        gtsave(tab, file = png_file),
+        error = function(e) {
+          save_ok <<- FALSE
+          message(
+            "PNG export failed for ", geography_name, " ", yr, " (", conditionMessage(e), "). ",
+            "Falling back to LaTeX."
+          )
+        }
+      )
+      if (!save_ok) {
+        tex_file <- file.path(out_dir, paste0("demographics_table_", geography_stub, "_", yr, ".tex"))
+        gtsave(tab, file = tex_file)
       }
-    )
-    if (!save_ok) {
-      tex_file <- file.path(out_dir, paste0("demographics_table_", yr, ".tex"))
-      gtsave(tab, file = tex_file)
+      tables[[paste(geography_name, yr, sep = "_")]] <- tab
     }
-    tables[[as.character(yr)]] <- tab
   }
 
   invisible(tables)

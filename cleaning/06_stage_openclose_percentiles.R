@@ -7,6 +7,11 @@ suppressPackageStartupMessages({
   library(stringr)
 })
 
+shared_helper_path <- "cleaning/00_shared_urbanicity_helpers.R"
+if (!exists("ocgh_attach_hsa_panel_assignment") && file.exists(shared_helper_path)) {
+  source(shared_helper_path, local = FALSE)
+}
+
 resolve_input_path <- function(primary_path, label) {
   if (file.exists(primary_path)) return(primary_path)
   stop(label, " not found at: ", primary_path)
@@ -16,14 +21,23 @@ percentile_rank <- function(x, value) {
   mean(x <= value, na.rm = TRUE) * 100
 }
 
-add_percentile_cols <- function(df, ntl, vars_to_rank) {
-  df %>%
-    rowwise() %>%
+augment_reference_percentiles <- function(ntl, vars_to_rank, geography_col, suffix) {
+  ntl %>%
+    group_by(year) %>%
     mutate(
       across(
         all_of(vars_to_rank),
-        ~ percentile_rank(ntl[[cur_column()]][ntl$year == year], .x),
+        ~ dplyr::if_else(is.na(.x), NA_real_, dplyr::cume_dist(.x) * 100),
         .names = "{.col}_percentile"
+      )
+    ) %>%
+    ungroup() %>%
+    group_by(year, .data[[geography_col]]) %>%
+    mutate(
+      across(
+        all_of(vars_to_rank),
+        ~ dplyr::if_else(is.na(.x), NA_real_, dplyr::cume_dist(.x) * 100),
+        .names = paste0("{.col}_percentile", suffix)
       )
     ) %>%
     ungroup()
@@ -42,7 +56,10 @@ stage_openclose_percentiles <- function(
   closures_file = "data/raw/updated_closures_august2025.csv",
   crosswalk_file = "data/raw/ZipHsaHrr.csv",
   national_percentiles_file = "data/interim/ntl_hsa_percentiles.csv",
-  interim_dir = "data/interim"
+  interim_dir = "data/interim",
+  ruca_file = "data/raw/RUCA2010zipcode.xlsx",
+  zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+  census_root = "data/raw/census_raw_data"
 ) {
   openings_path <- resolve_input_path(openings_file, "Openings file")
   closures_path <- resolve_input_path(closures_file, "Closures file")
@@ -76,7 +93,27 @@ stage_openclose_percentiles <- function(
     filter(event_year >= 2010, !is.na(event_year)) %>%
     left_join(zip_hsa, by = "zip5")
 
-  ntl <- read_csv(national_path, show_col_types = FALSE)
+  ntl_base <- read_csv(national_path, show_col_types = FALSE)
+  ntl_pw <- ntl_base %>%
+    ocgh_attach_hsa_panel_assignment(
+      crosswalk_file = crosswalk_path,
+      ruca_file = ruca_file,
+      method = "hsa_population_weighted",
+      zip_zcta_file = zip_zcta_file,
+      census_root = census_root
+    )
+  ntl_zip <- ntl_base %>%
+    ocgh_attach_hsa_panel_assignment(
+      crosswalk_file = crosswalk_path,
+      ruca_file = ruca_file,
+      method = "hsa_zip_count",
+      zip_zcta_file = zip_zcta_file,
+      census_root = census_root
+    ) %>%
+    select(hsanum, year, ruca_grouped_zip = ruca_grouped, geography_type_zip = geography_type)
+
+  ntl <- ntl_pw %>%
+    left_join(ntl_zip, by = c("hsanum", "year"))
 
   vars_to_rank <- c(
     "weighted_median_household_income_event",
@@ -92,6 +129,18 @@ stage_openclose_percentiles <- function(
     "population_density",
     "pop_change_pct"
   )
+
+  ntl <- ntl %>%
+    augment_reference_percentiles(
+      vars_to_rank = vars_to_rank,
+      geography_col = "geography_type",
+      suffix = "_geo"
+    ) %>%
+    augment_reference_percentiles(
+      vars_to_rank = vars_to_rank,
+      geography_col = "geography_type_zip",
+      suffix = "_geo_zip_count"
+    )
 
   missing_cols <- setdiff(c("hsanum", "year", vars_to_rank), names(ntl))
   if (length(missing_cols) > 0) {
@@ -112,13 +161,11 @@ stage_openclose_percentiles <- function(
   openings_with_stats <- openings_events %>%
     left_join(ntl, by = c("hsanum", "year")) %>%
     filter(year >= 2010) %>%
-    add_percentile_cols(ntl = ntl, vars_to_rank = vars_to_rank) %>%
     mutate(group = "Opening")
 
   closures_with_stats <- closures_events %>%
     left_join(ntl, by = c("hsanum", "year")) %>%
     filter(year >= 2010) %>%
-    add_percentile_cols(ntl = ntl, vars_to_rank = vars_to_rank) %>%
     mutate(group = "Closure")
 
   event_keys <- bind_rows(
@@ -130,7 +177,6 @@ stage_openclose_percentiles <- function(
     filter(year >= 2010) %>%
     anti_join(event_keys, by = c("hsanum", "year")) %>%
     mutate(opening = 0L, closure = 0L) %>%
-    add_percentile_cols(ntl = ntl, vars_to_rank = vars_to_rank) %>%
     mutate(group = "non-event")
 
   df_all <- bind_rows(openings_with_stats, closures_with_stats, non_event) %>%
@@ -144,7 +190,31 @@ stage_openclose_percentiles <- function(
       latino_percentile = weighted_percent_hispanic_or_latino_event_percentile,
       poverty_percentile = weighted_percent_below_poverty_line_event_percentile,
       SDI_percentile = weighted_SDI_score_event_percentile,
-      certbeds_per_1000_residents_percentile = certbeds_per_1000_residents_lag1_percentile
+      certbeds_per_1000_residents_percentile = certbeds_per_1000_residents_lag1_percentile,
+      income_percentile_geo = weighted_median_household_income_event_percentile_geo,
+      health_insurance_percentile_geo = weighted_percent_any_health_insur_event_percentile_geo,
+      public_health_insurance_percentile_geo = weighted_percent_public_health_insur_event_percentile_geo,
+      unemployment_rate_percentile_geo = weighted_unemployment_rate_event_percentile_geo,
+      bachelors_percentile_geo = weighted_percent_bachelors_event_percentile_geo,
+      black_percentile_geo = weighted_percent_black_event_percentile_geo,
+      latino_percentile_geo = weighted_percent_hispanic_or_latino_event_percentile_geo,
+      poverty_percentile_geo = weighted_percent_below_poverty_line_event_percentile_geo,
+      SDI_percentile_geo = weighted_SDI_score_event_percentile_geo,
+      certbeds_per_1000_residents_percentile_geo = certbeds_per_1000_residents_lag1_percentile_geo,
+      population_density_percentile_geo = population_density_percentile_geo,
+      pop_change_pct_percentile_geo = pop_change_pct_percentile_geo,
+      income_percentile_geo_zip_count = weighted_median_household_income_event_percentile_geo_zip_count,
+      health_insurance_percentile_geo_zip_count = weighted_percent_any_health_insur_event_percentile_geo_zip_count,
+      public_health_insurance_percentile_geo_zip_count = weighted_percent_public_health_insur_event_percentile_geo_zip_count,
+      unemployment_rate_percentile_geo_zip_count = weighted_unemployment_rate_event_percentile_geo_zip_count,
+      bachelors_percentile_geo_zip_count = weighted_percent_bachelors_event_percentile_geo_zip_count,
+      black_percentile_geo_zip_count = weighted_percent_black_event_percentile_geo_zip_count,
+      latino_percentile_geo_zip_count = weighted_percent_hispanic_or_latino_event_percentile_geo_zip_count,
+      poverty_percentile_geo_zip_count = weighted_percent_below_poverty_line_event_percentile_geo_zip_count,
+      SDI_percentile_geo_zip_count = weighted_SDI_score_event_percentile_geo_zip_count,
+      certbeds_per_1000_residents_percentile_geo_zip_count = certbeds_per_1000_residents_lag1_percentile_geo_zip_count,
+      population_density_percentile_geo_zip_count = population_density_percentile_geo_zip_count,
+      pop_change_pct_percentile_geo_zip_count = pop_change_pct_percentile_geo_zip_count
     )
 
   dir.create(interim_dir, recursive = TRUE, showWarnings = FALSE)
