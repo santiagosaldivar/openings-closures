@@ -221,18 +221,18 @@ run_percentile_plots <- function(
   six_panel_vars <- c(
     "bachelors_percentile",
     "income_percentile",
-    "poverty_percentile",
-    "unemployment_rate_percentile",
+    "public_health_insurance_percentile",
     "SDI_percentile",
-    "public_health_insurance_percentile"
+    "pop_change_pct_percentile",
+    "certbeds_per_1000_residents_percentile"
   )
   six_panel_titles <- c(
     "bachelors_percentile" = "Bachelor's Degree",
     "income_percentile" = "Median Household Income",
-    "poverty_percentile" = "Below Poverty Line",
-    "unemployment_rate_percentile" = "Unemployment Rate",
     "SDI_percentile" = "Social Deprivation Index",
-    "public_health_insurance_percentile" = "Public Health Insurance"
+    "public_health_insurance_percentile" = "Public Health Insurance",
+    "pop_change_pct_percentile" = "Population Change",
+    "certbeds_per_1000_residents_percentile" = "Certified Beds per 1,000 Residents"
   )
   df_openings_closures_panel <- df_openings_closures
   if (panel_assignment %in% c("hsa_population_weighted", "hsa_zip_count")) {
@@ -264,8 +264,8 @@ run_percentile_plots <- function(
     legend_labels <- setNames(summary_n$label, summary_n$group)
     p <- ggplot(df, aes(x = group, y = .data[[var]], fill = group, color = group)) +
       geom_violin(alpha = 0.5, linetype = "dashed") +
-      scale_fill_manual(values = c("Closure" = "#D73027", "Opening" = "#1BC9C9", "non-event" = "gray70"), labels = legend_labels) +
-      scale_color_manual(values = c("Closure" = "#D73027", "Opening" = "#1BC9C9", "non-event" = "gray50"), guide = "none") +
+      scale_fill_manual(values = c("Closure" = "#D73027", "Opening" = "#2166AC", "non-event" = "gray70"), labels = legend_labels) +
+      scale_color_manual(values = c("Closure" = "#D73027", "Opening" = "#2166AC", "non-event" = "gray50"), guide = "none") +
       labs(x = "Group", y = "Within-Year Percentile", fill = "") +
       theme_minimal(base_size = 12)
     if (!is.null(output_path)) {
@@ -848,7 +848,7 @@ run_kw_final_table <- function(
     "% Variable-specific sample sizes by panel/group",
     "\\centering",
     "\\begin{threeparttable}",
-    "    \\captionof{table}{Variable-Specific Sample Sizes for Community Characteristics Table}",
+    "    \\captionof{table}{Variable-Specific Sample Sizes by Event Type and Urbanicity}",
     "    \\begin{tabular}{lccc|ccc|ccc}",
     "    \\toprule",
     "    & \\multicolumn{3}{c}{\\textbf{Overall}} & \\multicolumn{3}{c}{\\textbf{Urban}} & \\multicolumn{3}{c}{\\textbf{Rural \\& Small Town}} \\\\",
@@ -860,8 +860,8 @@ run_kw_final_table <- function(
     "    \\end{tabular}",
     "    \\begin{tablenotes}",
     "      \\small",
-    "      \\item \\textit{Note:} N counts represent the number of non-missing HSA-year observations contributing to each variable within each panel/group.",
-    "      \\item For the event columns, counts reflect HSA-year event observations in which an opening or closure occurred, not unique hospital CCNs. The non-event columns count HSA-year observations without an opening or closure in that year.",
+    "      \\item \\textit{Note:} N counts represent the number of non-missing HSA-year observations contributing to each variable within each panel/group, across the full study period (2010--2023).",
+    "      \\item For the event columns, counts reflect HSA-year event observations in which an opening or closure occurred, not the number of distinct hospitals. The non-event columns count HSA-year observations without an opening or closure in that year. Urban/rural panel assignment follows the same population-weighted plurality RUCA method described in the main table.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )
@@ -1096,7 +1096,7 @@ run_percentile_forest_plot <- function(
   )
   
   # Standard (asterisk-column) palette
-  palette_values <- c("Opening" = "#1BC9C9", "Closure" = "#D73027")
+  palette_values <- c("Opening" = "#2166AC", "Closure" = "#D73027")
   shape_values   <- c("Opening" = 18, "Closure" = 16)
   
   label_values <- row_spec$`Demographic Variable`
@@ -1154,8 +1154,18 @@ run_percentile_forest_plot <- function(
     legend_labels <- legend_data %>%
       mutate(label = paste0(group, " (max n = ", max_n, ")")) %>%
       { setNames(.$label, .$group) }
+    # Alternating gray background in the plot
+    shaded_rows <- tibble::tibble(row_position = c(2, 4, 6, 8, 10)) %>%
+      mutate(ymin = row_position - 0.5, ymax = row_position + 0.5)
 
+    
     p <- ggplot(plot_data, aes(x = mean_value, y = y, color = group, shape = group)) +
+      geom_rect(
+        data = shaded_rows,
+        aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax),
+        inherit.aes = FALSE,
+        fill = "gray92"
+      ) +
       geom_vline(xintercept = 50, linetype = "dashed", color = "gray45", linewidth = 0.5) +
       geom_segment(aes(x = ci_lower, xend = ci_upper, yend = y),
                    linewidth = segment_size, na.rm = TRUE) +
@@ -1378,6 +1388,7 @@ run_appendix_tables <- function(
   out_table_dir = "outputs/tables"
 ) {
   df_all <- read_csv(input_csv, show_col_types = FALSE)
+  df_unique <- df_all %>% distinct(hsanum, year, .keep_all = TRUE)
 
   mapping <- tibble::tibble(
     Demographic = c(
@@ -1443,7 +1454,7 @@ run_appendix_tables <- function(
   }
 
   target_vars <- mapping$Demographic
-  quantile_table <- df_all %>%
+  quantile_table <- df_unique %>%
     filter(year == 2016) %>%
     select(all_of(target_vars)) %>%
     pivot_longer(cols = everything(), names_to = "Demographic", values_to = "Value") %>%
@@ -1463,7 +1474,7 @@ run_appendix_tables <- function(
     arrange(row_order)
 
   # Longitudinal medians
-  longitudinal_medians <- df_all %>%
+  longitudinal_medians <- df_unique %>%
     filter(year %in% odd_years) %>%
     select(year, all_of(target_vars)) %>%
     pivot_longer(cols = -year, names_to = "Demographic", values_to = "Value") %>%
@@ -1542,10 +1553,10 @@ run_appendix_tables <- function(
     "\\centering",
     "\\begin{threeparttable}",
     "    \\setcounter{table}{4}",
-    "    \\captionof{table}{Descriptive Statistics of Hospital Service Area (HSA) Community Characteristics, 2016}",
+    "    \\captionof{table}{Distribution of Community Characteristics Across Hospital Service Areas, 2016}",
     "    \\begin{tabular}{lccccc}",
     "    \\toprule",
-    "    & \\multicolumn{5}{c}{\\textbf{Quantiles}} \\\\",
+    "    & \\multicolumn{5}{c}{\\textbf{Summary Statistics}} \\\\",
     "    \\cmidrule(lr){2-6}",
     "    & Min & Q1 & Median & Q3 & Max \\\\",
     "    \\midrule",
@@ -1554,8 +1565,8 @@ run_appendix_tables <- function(
     "    \\end{tabular}",
     "    \\begin{tablenotes}",
     "      \\small",
-    "      \\item \\textit{Note:} This table reports the minimum, 25th percentile, median, 75th percentile, and maximum of HSA-level community characteristics in 2016. HSA-level values are population-weighted averages of ZIP-code-level data.",
-    "      \\item Certified beds per 1,000 residents is based on the prior calendar year. Population density is measured as persons per square mile, and median household income is reported in nominal dollars.",
+    "      \\item \\textit{Note:} This table reports the minimum, 25th percentile, median, 75th percentile, and maximum of HSA-level community characteristics in 2016, across all HSAs with available data. HSA-level values are population-weighted averages of ZIP-code-level data.",
+    "      \\item Certified beds per 1,000 residents reflects 2015 certified bed counts. Population density is measured as persons per square mile, and median household income is reported in nominal dollars.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )
@@ -1565,7 +1576,7 @@ run_appendix_tables <- function(
     "\\centering",
     "\\begin{threeparttable}",
     "    \\setcounter{table}{5}",
-    "    \\captionof{table}{Longitudinal Trends in Median Community Characteristics, 2011--2023}",
+    "    \\captionof{table}{Median Community Characteristics Across All HSAs, 2011--2023}",
     "    \\begin{tabular}{lccccccc}",
     "    \\toprule",
     "    & \\multicolumn{7}{c}{\\textbf{Median Values (Odd Years)}} \\\\",
@@ -1577,8 +1588,8 @@ run_appendix_tables <- function(
     "    \\end{tabular}",
     "    \\begin{tablenotes}",
     "      \\small",
-    "      \\item \\textit{Note:} This table displays longitudinal median values of HSA-level community characteristics for odd-numbered years from 2011 through 2023. HSA-level values are population-weighted averages of ZIP-code-level data, and median household income is reported in nominal dollars.",
-    "      \\item Certified beds per 1,000 residents is based on the prior calendar year and therefore begins in 2012; blank entries indicate years in which the measure is unavailable. Population density is measured as persons per square mile.",
+    "      \\item \\textit{Note:} This table reports the median of each HSA-level community characteristic for odd-numbered years from 2011 through 2023, computed across all HSAs in the national sample. HSA-level values are population-weighted averages of ZIP-code-level data, and median household income is reported in nominal dollars.",
+    "      \\item Certified beds per 1,000 residents is based on the prior calendar year; data are available from 2012, so the first value shown is 2013. Blank entries throughout indicate years in which data are unavailable due to ACS coverage limitations. Population density is measured as persons per square mile.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )

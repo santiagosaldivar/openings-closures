@@ -209,6 +209,7 @@ build_event_counts_by_census_region <- function(
     title = NULL,
     x_label = NULL,
     out_path = out_plot_poster_hires,
+    font_family = "Times New Roman",
     width = 12,
     height = 7.2,
     dpi = 600
