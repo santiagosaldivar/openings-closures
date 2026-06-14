@@ -11,10 +11,13 @@
 # Backup/archive content not used by pipeline
 archive/
 
+# Validation exercises
+validation/
+
 # Project outputs (regenerate from pipeline)
 outputs/
 
-# Data strategy for GitHub (Option A: host data externally)
+# Data strategy for GitHub (Host data externally)
 data/
 
 # Keep optional placeholder files if you add them
