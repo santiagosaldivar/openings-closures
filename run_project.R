@@ -159,7 +159,10 @@ if (exists("run_hospital_characteristics")) {
     openings_path = "data/interim/openings_clean.csv",
     closures_path = "data/interim/closures_clean.csv",
     pos_path = "data/processed/pos_panel_updated.csv",
-    out_tex = "outputs/tables/hospital_characteristics.tex"
+    out_tex = "outputs/tables/hospital_characteristics.tex",
+    out_tex_sensitivity = "outputs/tables/hospital_characteristics_sensitivity.tex",
+    out_counts_csv = "outputs/tables/hospital_group_counts.csv",
+    out_tests_csv = "outputs/tables/hospital_characteristics_tests.csv"
   )
 } else {
   message("Skipping hospital characteristics table (run_hospital_characteristics() not found).")
@@ -230,9 +233,32 @@ if (exists("run_appendix_tables")) {
 
 if (exists("run_descriptive")) {
   message("Running descriptive analysis...")
-  run_descriptive(input_dir = "data/processed", out_dir = "outputs/tables")
+  run_descriptive(
+    openings_path  = "data/interim/openings_clean.csv",
+    closures_path  = "data/interim/closures_clean.csv",
+    pos_path       = "data/processed/pos_panel_updated.csv",
+    out_dir        = "outputs/tables",
+    snapshot_years = c(2010, 2023),
+    year_range     = 2010:2023
+  )
 } else {
   message("Skipping descriptive analysis (run_descriptive() not found).")
+}
+
+if (exists("run_decile_grid_heatmaps")) {
+  message("Building decile-grid heatmaps...")
+  run_decile_grid_heatmaps(
+    input_csv     = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir   = "outputs/figures/decile_grids",
+    openings_file = "data/raw/updated_openings_august2025.csv",
+    closures_file = "data/raw/updated_closures_august2025.csv",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    x_var         = "poverty_percentile",
+    y_var         = "pop_change_pct_percentile",
+    cell_n        = "hsa"
+  )
+} else {
+  message("Skipping decile-grid heatmaps (run_decile_grid_heatmaps() not found).")
 }
 
 if (exists("run_main_models")) {

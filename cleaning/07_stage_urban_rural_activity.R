@@ -85,6 +85,16 @@ stage_urban_rural_activity <- function(
       )
     )
 
+  verify_table <- event_processed %>%
+    pivot_wider(
+      names_from = c(ruca_grouped, event_type),
+      values_from = count,
+      values_fill = 0
+    ) %>%
+    arrange(event_year)
+  
+  print(verify_table, n = Inf, width = Inf)
+  
   p_combined <- ggplot(
     event_processed,
     aes(x = event_year, y = count, color = ruca_grouped, linetype = event_type)

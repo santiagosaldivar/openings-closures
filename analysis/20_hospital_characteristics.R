@@ -6,6 +6,9 @@ suppressPackageStartupMessages({
   library(readr)
   library(kableExtra)
   library(rlang)
+  library(tidyr)
+  library(sandwich)
+  library(lmtest)
 })
 
 #' Build hospital characteristics table
@@ -22,7 +25,8 @@ run_hospital_characteristics <- function(
   pos_path = "data/processed/pos_panel_updated.csv",
   out_tex = "outputs/tables/hospital_characteristics.tex",
   out_tex_sensitivity = "outputs/tables/hospital_characteristics_sensitivity.tex",
-  out_counts_csv = "outputs/tables/hospital_group_counts.csv"
+  out_counts_csv = "outputs/tables/hospital_group_counts.csv",
+  out_tests_csv = "outputs/tables/hospital_characteristics_tests.csv"
 ) {
   if (!file.exists(openings_path)) stop("Openings file not found: ", openings_path)
   if (!file.exists(closures_path)) stop("Closures file not found: ", closures_path)
@@ -56,7 +60,9 @@ run_hospital_characteristics <- function(
 # CHECK THE LINE BELOW
   panel_wo_events <- subset(
     pos_panel_updated,
-    (opening != 1 | is.na(opening)) & (closure != 1 | is.na(closure) & beds > 1)
+    (opening != 1 | is.na(opening)) &
+      (closure != 1 | is.na(closure)) &
+      (is.na(certbeds) | certbeds > 1)
   )
 
   panel_openings <- subset(pos_panel_updated, opening == 1)
@@ -255,6 +261,86 @@ run_hospital_characteristics <- function(
     ) %>%
     ungroup() %>%
     arrange(row_order)
+  
+  ## ---- Clustered difference-in-means tests --------------------------------
+  ## Each characteristic is compared between an event group (openings or
+  ## closures) and the non-event baseline via lm(outcome ~ event_indicator)
+  ## with SEs clustered by hospital (ccn, CR1). The indicator coefficient is
+  ## the event-minus-non-event difference, so the group means implied by each
+  ## regression equal the means tabulated above. Event side carries no active
+  ## filter (matches calc_event_overall); non-event side is active == 1 from
+  ## panel_wo_events (matches calc_nonevent_overall).
+  nonevent_active <- panel_wo_events %>% filter(active == 1)
+  
+  run_clustered_diff <- function(event_df, nonevent_df, var_col_sym,
+                                 is_binary, binary_values = NULL) {
+    build_group <- function(df, grp) {
+      df <- df %>% filter(!is.na(!!var_col_sym))
+      vals <- df %>% pull(!!var_col_sym)
+      y <- if (is_binary) as.numeric(vals %in% binary_values) * 100 else as.numeric(vals)
+      tibble::tibble(ccn = df$ccn, y = y, group = grp)
+    }
+    ev <- build_group(event_df, 1L)
+    ne <- build_group(nonevent_df, 0L)
+    if (nrow(ev) == 0L || nrow(ne) == 0L) {
+      return(tibble::tibble(
+        estimate = NA_real_, se = NA_real_, t = NA_real_, df = NA_real_,
+        p_value = NA_real_, ci_low = NA_real_, ci_high = NA_real_,
+        n_event = nrow(ev), n_nonevent = nrow(ne), n_clusters = NA_integer_
+      ))
+    }
+    dat <- dplyr::bind_rows(ev, ne)
+    fit <- lm(y ~ group, data = dat)
+    vc  <- sandwich::vcovCL(fit, cluster = dat$ccn, type = "HC1", cadjust = TRUE)
+    G   <- dplyr::n_distinct(dat$ccn)
+    ct  <- lmtest::coeftest(fit, vcov. = vc, df = G - 1L)
+    est <- ct["group", "Estimate"]
+    se  <- ct["group", "Std. Error"]
+    tcrit <- qt(0.975, df = G - 1L)
+    tibble::tibble(
+      estimate   = est,
+      se         = se,
+      t          = ct["group", "t value"],
+      df         = G - 1L,
+      p_value    = ct["group", "Pr(>|t|)"],
+      ci_low     = est - tcrit * se,
+      ci_high    = est + tcrit * se,
+      n_event    = nrow(ev),
+      n_nonevent = nrow(ne),
+      n_clusters = G
+    )
+  }
+  
+  tests_tidy <- variable_specs %>%
+    rowwise() %>%
+    mutate(
+      res = list(dplyr::bind_rows(
+        run_clustered_diff(panel_closures, nonevent_active, var_sym,
+                           is_binary, binary_values[[1]]) %>%
+          mutate(comparison = "closures_vs_nonevent"),
+        run_clustered_diff(panel_openings, nonevent_active, var_sym,
+                           is_binary, binary_values[[1]]) %>%
+          mutate(comparison = "openings_vs_nonevent")
+      ))
+    ) %>%
+    ungroup() %>%
+    select(key, section, label, row_order, res) %>%
+    tidyr::unnest(res) %>%
+    arrange(row_order, comparison) %>%
+    select(key, section, label, comparison, estimate, se, t, df, p_value,
+           ci_low, ci_high, n_event, n_nonevent, n_clusters)
+  
+  fmt_p <- function(p) {
+    if (length(p) == 0 || is.na(p)) return("")
+    if (p < 0.001) "<0.001" else sprintf("%.3f", p)
+  }
+  
+  get_p <- function(lbl, comp) {
+    out <- tests_tidy %>%
+      filter(label == lbl, comparison == comp) %>%
+      pull(p_value)
+    fmt_p(if (length(out) == 0) NA_real_ else out[[1]])
+  }
 
   # Main table: Closures/Openings/Non-event (single non-event baseline)
   main_table_df <- final_summary_df %>%
@@ -308,41 +394,52 @@ run_hospital_characteristics <- function(
   fmt <- function(x) sprintf("%.2f", x)
 
   main_body <- c(
-    "\\multicolumn{4}{l}{\\textbf{Ownership Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} For-Profit & %s & %s & %s \\\\",
+    "\\multicolumn{6}{l}{\\textbf{Ownership Status (\\%)}} \\\\",
+    sprintf("\\hspace{3mm} For-Profit & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "For-Profit", "Closures")),
             fmt(get_val(main_table_df, "For-Profit", "Openings")),
-            fmt(get_val(main_table_df, "For-Profit", "Non-event"))),
-    sprintf("\\hspace{3mm} Non-Profit & %s & %s & %s \\\\",
+            fmt(get_val(main_table_df, "For-Profit", "Non-event")),
+            get_p("For-Profit", "closures_vs_nonevent"),
+            get_p("For-Profit", "openings_vs_nonevent")),
+    sprintf("\\hspace{3mm} Non-Profit & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "Non-Profit", "Closures")),
             fmt(get_val(main_table_df, "Non-Profit", "Openings")),
-            fmt(get_val(main_table_df, "Non-Profit", "Non-event"))),
-    sprintf("\\hspace{3mm} Public     & %s & %s  & %s \\\\",
+            fmt(get_val(main_table_df, "Non-Profit", "Non-event")),
+            get_p("Non-Profit", "closures_vs_nonevent"),
+            get_p("Non-Profit", "openings_vs_nonevent")),
+    sprintf("\\hspace{3mm} Public     & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "Public", "Closures")),
             fmt(get_val(main_table_df, "Public", "Openings")),
-            fmt(get_val(main_table_df, "Public", "Non-event"))),
+            fmt(get_val(main_table_df, "Public", "Non-event")),
+            get_p("Public", "closures_vs_nonevent"),
+            get_p("Public", "openings_vs_nonevent")),
     "\\addlinespace",
     "",
-    "\\multicolumn{4}{l}{\\textbf{Teaching Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} Major Teaching & %s & %s & %s \\\\",
+    "\\multicolumn{6}{l}{\\textbf{Teaching Status (\\%)}} \\\\",
+    sprintf("\\hspace{3mm} Major Teaching & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "Major Teaching", "Closures")),
             fmt(get_val(main_table_df, "Major Teaching", "Openings")),
-            fmt(get_val(main_table_df, "Major Teaching", "Non-event"))),
-    sprintf("\\hspace{3mm} Graduate Teaching & %s & %s & %s \\\\",
+            fmt(get_val(main_table_df, "Major Teaching", "Non-event")),
+            get_p("Major Teaching", "closures_vs_nonevent"),
+            get_p("Major Teaching", "openings_vs_nonevent")),
+    sprintf("\\hspace{3mm} Graduate Teaching & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "Graduate Teaching", "Closures")),
             fmt(get_val(main_table_df, "Graduate Teaching", "Openings")),
-            fmt(get_val(main_table_df, "Graduate Teaching", "Non-event"))),
+            fmt(get_val(main_table_df, "Graduate Teaching", "Non-event")),
+            get_p("Graduate Teaching", "closures_vs_nonevent"),
+            get_p("Graduate Teaching", "openings_vs_nonevent")),
     "\\addlinespace",
     "",
-    "\\multicolumn{4}{l}{\\textbf{Capacity}} \\\\",
-    sprintf("\\hspace{3mm} Certified Beds (Mean) & %s & %s & %s \\\\",
+    "\\multicolumn{6}{l}{\\textbf{Capacity}} \\\\",
+    sprintf("\\hspace{3mm} Certified Beds (Mean) & %s & %s & %s & %s & %s \\\\",
             fmt(get_val(main_table_df, "Certified Beds (Mean)", "Closures")),
             fmt(get_val(main_table_df, "Certified Beds (Mean)", "Openings")),
-            fmt(get_val(main_table_df, "Certified Beds (Mean)", "Non-event")))
-  )
+            fmt(get_val(main_table_df, "Certified Beds (Mean)", "Non-event")),
+            get_p("Certified Beds (Mean)", "closures_vs_nonevent"),
+            get_p("Certified Beds (Mean)", "openings_vs_nonevent")))
 
   main_doc <- c(
-    "\\documentclass[varwidth=7in, border=10pt]{standalone}",
+    "\\documentclass[varwidth=9in, border=10pt]{standalone}",
     "\\usepackage{booktabs}",
     "\\usepackage{siunitx}",
     "\\usepackage{caption}",
@@ -358,10 +455,11 @@ run_hospital_characteristics <- function(
     "\\begin{tabular}{l ",
     "    S[table-format=3.2] ",
     "    S[table-format=3.2] ",
-    "    S[table-format=3.2]}",
+    "    S[table-format=3.2] ",
+    "    c c}",
     "\\toprule",
-    "Hospital Group & \\multicolumn{1}{c}{Closures} & \\multicolumn{1}{c}{Openings} & \\multicolumn{1}{c}{Non-event} \\\\",
-    sprintf(" & {(N = %s)} & {(N = %s)} & {(N = %s)} \\\\",
+    "Hospital Group & \\multicolumn{1}{c}{Closures} & \\multicolumn{1}{c}{Openings} & \\multicolumn{1}{c}{Non-event} & \\multicolumn{1}{c}{\\shortstack{$P$ vs.\\\\Non-event\\\\(Closures)}} & \\multicolumn{1}{c}{\\shortstack{$P$ vs.\\\\Non-event\\\\(Openings)}} \\\\",
+    sprintf(" & {(N = %s)} & {(N = %s)} & {(N = %s)} & & \\\\",
             format(n_closures, big.mark = ","), format(n_openings, big.mark = ","), format(n_nonevent, big.mark = ",")),
     "\\midrule",
     "",
@@ -373,7 +471,7 @@ run_hospital_characteristics <- function(
     "\\vspace{5pt}",
     "\\parbox{\\linewidth}{",
     "    \\footnotesize",
-    "    \\textit{Note:} The table displays descriptive statistics for hospitals categorized by their operational status between 2010 and 2023. Mean values for hospital characteristics are categorized by annual event status. Means corresponding to ``openings'' and ``closures'' are measured in the year of the respective event. The ``Non-event'' group includes all hospitals that did not experience an opening or closure in a given study year. Ownership and teaching status are reported as percentages.",
+    "    \\textit{Note:} The table displays descriptive statistics for hospitals categorized by their operational status between 2010 and 2023. Mean values for hospital characteristics are categorized by annual event status. Means corresponding to ``openings'' and ``closures'' are measured in the year of the respective event. The ``Non-event'' group includes all hospitals that did not experience an opening or closure in a given study year. Ownership and teaching status are reported as percentages. $P$-values test the difference in means between each event group and the non-event group, estimated by linear regression of the characteristic on an event indicator with standard errors clustered by hospital. The three ownership categories are mutually exhaustive and therefore linearly dependent, so their $P$-values are not mutually independent.",
     "}",
     "",
     "\\end{document}"
@@ -463,6 +561,7 @@ run_hospital_characteristics <- function(
   writeLines(main_doc, out_tex)
   writeLines(sensitivity_doc, out_tex_sensitivity)
   write_csv(counts_df, out_counts_csv)
+  write_csv(tests_tidy, out_tests_csv)
 
   message(
     sprintf(
@@ -481,10 +580,12 @@ run_hospital_characteristics <- function(
       total_unique_hospitals = total_unique_hospitals
     ),
     counts_table = counts_df,
+    tests = tests_tidy,
     outputs = c(
       main = out_tex,
       sensitivity = out_tex_sensitivity,
-      counts_csv = out_counts_csv
+      counts_csv = out_counts_csv,
+      tests_csv = out_tests_csv
     )
   ))
 }
