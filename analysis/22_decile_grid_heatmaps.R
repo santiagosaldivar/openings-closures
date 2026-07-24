@@ -1,8 +1,11 @@
 # Decile x decile grid heatmaps of hospital openings and closures.
 #
-# One axis is the HSA decile of the below-poverty-line variable; the other is
-# the HSA decile of the population-change variable. Cells are shaded by the
-# number of opening or closure EVENTS whose HSA falls in that decile pair.
+# The x-axis is always the HSA decile of the below-poverty-line variable. The
+# y-axis is defined by an `axis_spec` (see decile_grid_axis_spec below), so the
+# same machinery produces one figure set per y-variable. Two specs ship by
+# default: population-change (y measured in the event year) and prior-year
+# bed-supply (y measured in the year preceding the event). Cells are shaded by
+# the number of opening or closure EVENTS whose HSA falls in that decile pair.
 #
 # Counting grain (one row per actual event; no de-duplication):
 #   - two closures in the same HSA in the same year  -> +2 to that cell (closures)
@@ -14,10 +17,27 @@
 # each event's HSA-year percentiles, and as the full HSA-year universe for the
 # per-cell n denominator.
 #
-# Deciles are event-year within-year percentiles binned into 1-10; an HSA's
-# decile is an event-year property and can differ across that HSA's events.
+# Deciles are within-year percentiles binned into 1-10. The x decile is an
+# event-year property. The y decile's timing depends on the spec: for the
+# bed-supply axis the staged percentile is built from prior-year capacity, so
+# the y decile reflects the year before the event while x reflects the event
+# year. Each figure's Note records its own timing, event window, and event
+# counts, so the two sets are self-describing and must not be read as a matched
+# sample (they cover different windows and different event counts).
 #
-# Usage: source("R/analysis/22_decile_grid_heatmaps.R"); run_decile_grid_heatmaps()
+# Usage:
+#   source("R/analysis/22_decile_grid_heatmaps.R")
+#   run_all_decile_grid_heatmaps()                 # both axes -> two subdirs
+#   run_decile_grid_heatmaps()                     # population-change only
+#   run_decile_grid_heatmaps(
+#     axis_spec = decile_grid_default_specs()$beds_per_capita)  # beds only
+#
+# Output layout: figures, CSVs, and .tex land in out_fig_dir/<spec$slug>/, so
+# the two axes never overwrite each other and file BASENAMES stay stable
+# (decile_grid_two_panel.png, etc.). NOTE: this moves the population-change
+# outputs from outputs/figures/decile_grids/ down into
+# outputs/figures/decile_grids/pop_change/; update any downstream path that
+# referenced the old flat location.
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -33,30 +53,112 @@ if (!exists("ocgh_load_zip_hsa_lookup") && file.exists(shared_helper_path)) {
   source(shared_helper_path, local = FALSE)
 }
 
-#' Build decile-grid heatmaps of openings and closures.
+# ============================================================================
+# Axis specification
+# ============================================================================
+
+#' Describe one y-axis for the decile-grid heatmaps.
 #'
+#' @param slug short id; also the output subdirectory name and the stem of the
+#'   y-decile column name in the per-cell CSV
+#' @param y_var staged percentile column binned into the y decile
+#' @param y_label axis label on the figures
+#' @param y_prose lowercase noun phrase for the Note (e.g. "population-change")
+#' @param y_title_case title-case fragment for figure titles
+#'   (e.g. "Population-Change Deciles")
+#' @param y_timing when the y variable is measured, phrased for the Note
+#'   (e.g. "the event year", "the year preceding the event")
+#' @param note_extra optional extra sentence(s) appended to the Note; use for
+#'   axis-specific caveats such as mixed timing or a restricted universe
+#' @param min_year event-year floor applied when reading raw events; events
+#'   before their axis's first placeable year drop as percentile_missing and
+#'   are attributed in the dropped-events audit
+#' @param decile_colname override for the y-decile column name in the CSV;
+#'   defaults to paste0(slug, "_decile")
+decile_grid_axis_spec <- function(slug,
+                                  y_var,
+                                  y_label,
+                                  y_prose,
+                                  y_title_case,
+                                  y_timing = "the event year",
+                                  note_extra = NULL,
+                                  min_year = 2010L,
+                                  decile_colname = NULL) {
+  if (is.null(decile_colname)) decile_colname <- paste0(slug, "_decile")
+  list(
+    slug           = slug,
+    y_var          = y_var,
+    y_label        = y_label,
+    y_prose        = y_prose,
+    y_title_case   = y_title_case,
+    y_timing       = y_timing,
+    note_extra     = note_extra,
+    min_year       = as.integer(min_year),
+    decile_colname = decile_colname
+  )
+}
+
+#' The two axes produced by default.
+decile_grid_default_specs <- function() {
+  list(
+    pop_change = decile_grid_axis_spec(
+      slug         = "pop_change",
+      y_var        = "pop_change_pct_percentile",
+      y_label      = "Population-change decile (HSA, within-year)",
+      y_prose      = "population-change",
+      y_title_case = "Population-Change Deciles",
+      y_timing     = "the event year"
+    ),
+    beds_per_capita = decile_grid_axis_spec(
+      slug         = "beds_per_capita",
+      y_var        = "certbeds_per_1000_residents_percentile",
+      y_label      = "Prior-year beds per 1,000 decile (HSA, within-year)",
+      y_prose      = "prior-year bed-supply",
+      y_title_case = "Prior-Year Bed-Supply Deciles",
+      y_timing     = "the year preceding the event",
+      note_extra   = paste(
+        "Bed supply is measured in the year preceding the event, whereas the",
+        "poverty axis is measured in the event year; this one-year offset",
+        "avoids the mechanical effect of an opening or closure on its own",
+        "HSA's same-year bed supply. The bed-supply axis is defined only for",
+        "HSAs with an active hospital in the preceding year: HSA-years without",
+        "one receive no bed decile, so their events are excluded (attributed",
+        "as percentile_missing in the dropped-events audit)."
+      )
+    )
+  )
+}
+
+# ============================================================================
+# Single-axis worker
+# ============================================================================
+
+#' Build decile-grid heatmaps for one y-axis.
+#'
+#' @param axis_spec an object from decile_grid_axis_spec(); defaults to the
+#'   population-change axis, reproducing the pre-refactor behaviour (now written
+#'   into a pop_change/ subdirectory)
 #' @param input_csv staged percentile dataset (HSA-year grain; supplies the
 #'   percentile lookup and the full HSA-year universe for the denominator)
-#' @param out_fig_dir directory for figure, CSV, and standalone .tex outputs
+#' @param out_fig_dir PARENT directory; outputs land in out_fig_dir/<slug>/
 #' @param openings_file,closures_file raw event files (one row per event)
 #' @param crosswalk_file ZIP-to-HSA crosswalk (ZipHsaHrr)
-#' @param x_var,y_var percentile columns to bin into deciles
-#' @param x_label,y_label axis labels
+#' @param x_var poverty percentile column binned into the x decile
+#' @param x_label x-axis label
 #' @param cell_n which denominator to print in each cell: distinct HSAs in the
 #'   cell across the study, or pooled HSA-years in the cell
 #' @param open_color,close_color event hues (match the rest of the paper)
 #' @param font_family base font; dpi export resolution
 #' @return list of grid data and plots (invisible)
 run_decile_grid_heatmaps <- function(
+    axis_spec = decile_grid_default_specs()$pop_change,
     input_csv = "data/interim/opening_closure_nonevent_percentiles.csv",
     out_fig_dir = "outputs/figures/decile_grids",
     openings_file = "data/raw/updated_openings_august2025.csv",
     closures_file = "data/raw/updated_closures_august2025.csv",
     crosswalk_file = "data/raw/ZipHsaHrr.csv",
     x_var = "poverty_percentile",
-    y_var = "pop_change_pct_percentile",
     x_label = "Below-poverty-line decile (HSA, within-year)",
-    y_label = "Population-change decile (HSA, within-year)",
     cell_n = c("hsa", "hsa_year"),
     open_color = "#2166AC",
     close_color = "#D73027",
@@ -64,6 +166,10 @@ run_decile_grid_heatmaps <- function(
     dpi = 300
 ) {
   cell_n <- match.arg(cell_n)
+  y_var    <- axis_spec$y_var
+  y_label  <- axis_spec$y_label
+  min_year <- axis_spec$min_year
+  
   if (!file.exists(input_csv)) stop("Staged percentile file not found: ", input_csv)
   if (!file.exists(openings_file)) stop("Openings file not found: ", openings_file)
   if (!file.exists(closures_file)) stop("Closures file not found: ", closures_file)
@@ -71,7 +177,11 @@ run_decile_grid_heatmaps <- function(
     stop("Shared helper ocgh_load_zip_hsa_lookup() not found; source ", shared_helper_path)
   }
   
-  # --- Decile binning (event-year within-year percentile -> 1..10) ---
+  # Per-axis output directory keeps the two figure sets from colliding.
+  fig_dir <- file.path(out_fig_dir, axis_spec$slug)
+  dir.create(fig_dir, recursive = TRUE, showWarnings = FALSE)
+  
+  # --- Decile binning (within-year percentile -> 1..10) ---
   to_decile <- function(p) {
     mx <- suppressWarnings(max(p, na.rm = TRUE))
     if (is.finite(mx) && mx <= 1) p <- p * 100  # guard if stored on 0-1 scale
@@ -115,7 +225,7 @@ run_decile_grid_heatmaps <- function(
         year = as.integer(.data[[year_col]]),
         group = group_label
       ) %>%
-      filter(year >= 2010, !is.na(year))
+      filter(year >= min_year, !is.na(year))
   }
   
   events_raw <- bind_rows(
@@ -138,21 +248,30 @@ run_decile_grid_heatmaps <- function(
   events <- events_raw %>% filter(drop_cause == "kept")
   n_dropped <- n_total_events - nrow(events)
   
-  dir.create(out_fig_dir, recursive = TRUE, showWarnings = FALSE)
   if (n_dropped > 0) {
     drop_summary <- events_raw %>%
       filter(drop_cause != "kept") %>%
       count(group, drop_cause, name = "n") %>%
       arrange(group, drop_cause)
     message(sprintf(
-      "Dropped %d of %d events without a usable decile. Breakdown by cause:",
-      n_dropped, n_total_events
+      "[%s] Dropped %d of %d events without a usable decile. Breakdown by cause:",
+      axis_spec$slug, n_dropped, n_total_events
     ))
     print(as.data.frame(drop_summary), row.names = FALSE)
     write_csv(
       events_raw %>% filter(drop_cause != "kept"),
-      file.path(out_fig_dir, "decile_grid_dropped_events.csv")
+      file.path(fig_dir, "decile_grid_dropped_events.csv")
     )
+  }
+  
+  # Placed-year window, computed from data so the Note is self-describing.
+  if (nrow(events) == 0) stop("No events placed for axis '", axis_spec$slug, "'.")
+  placed_min <- min(events$year)
+  placed_max <- max(events$year)
+  window_str <- if (placed_min == placed_max) {
+    as.character(placed_min)
+  } else {
+    paste0(placed_min, "\u2013", placed_max)
   }
   
   cell_events <- events %>%
@@ -325,45 +444,51 @@ run_decile_grid_heatmaps <- function(
     grid_theme
   
   # --- Export ---
-  dir.create(out_fig_dir, recursive = TRUE, showWarnings = FALSE)
-  f_two   <- file.path(out_fig_dir, "decile_grid_two_panel.png")
-  f_bivar <- file.path(out_fig_dir, "decile_grid_bivariate.png")
-  f_dot   <- file.path(out_fig_dir, "decile_grid_dot_on_tile.png")
+  f_two   <- file.path(fig_dir, "decile_grid_two_panel.png")
+  f_bivar <- file.path(fig_dir, "decile_grid_bivariate.png")
+  f_dot   <- file.path(fig_dir, "decile_grid_dot_on_tile.png")
   
   ggsave(f_two,   p_two_panel, width = 14, height = 7,  dpi = dpi)
   ggsave(f_bivar, p_bivar,     width = 10, height = 7.5, dpi = dpi)
   ggsave(f_dot,   p_dot,       width = 9,  height = 7.5, dpi = dpi)
   
   # --- Per-cell CSV (both denominators retained regardless of cell_n) ---
+  ycol <- axis_spec$decile_colname
   grid_out <- grid %>%
     transmute(
       poverty_decile = x_dec,
-      pop_change_decile = y_dec,
+      y_dec,
       openings = Opening,
       closures = Closure,
       n_hsa,
       n_hsa_year,
       is_empty
     ) %>%
-    arrange(poverty_decile, pop_change_decile)
-  write_csv(grid_out, file.path(out_fig_dir, "decile_grid_cell_counts.csv"))
+    rename(!!ycol := y_dec) %>%
+    arrange(across(all_of(c("poverty_decile", ycol))))
+  write_csv(grid_out, file.path(fig_dir, "decile_grid_cell_counts.csv"))
   
   # --- Standalone .tex companions (image + caption + notes), matching pipeline ---
-  n_open_total <- sum(grid$Opening)
-  n_close_total <- sum(grid$Closure)
+  n_open_total   <- sum(grid$Opening)
+  n_close_total  <- sum(grid$Closure)
   n_hsa_universe <- n_distinct(universe$hsanum)
-  n_cell_label <- if (cell_n == "hsa") "distinct HSAs" else "HSA-years"
+  n_cell_label   <- if (cell_n == "hsa") "distinct HSAs" else "HSA-years"
   
-  note_text <- paste(
+  note_parts <- c(
     sprintf(
-      "Each cell aggregates hospital event counts by HSA decile of the below-poverty-line and population-change variables (within-year percentiles binned into deciles, measured in the event year). Counts are individual events: %s openings and %s closures placed; an HSA may contribute to multiple cells across years, and multiple events in one HSA-year each count.",
+      "Each cell aggregates hospital event counts by HSA decile of the below-poverty-line variable (measured in the event year) and the %s variable (measured in %s), each expressed as within-year percentiles binned into deciles. Counts are individual events placed over %s: %s openings and %s closures; an HSA may contribute to multiple cells across years, and multiple events in one HSA-year each count.",
+      axis_spec$y_prose, axis_spec$y_timing, window_str,
       format(n_open_total, big.mark = ","), format(n_close_total, big.mark = ",")
     ),
     sprintf(
-      "Parenthetical values are the number of %s in each cell (universe of %s HSAs). Empty cells (no HSA in that decile pair) are shown in grey and distinct from populated cells with zero events.",
+      "Parenthetical values are the number of %s in each cell (universe of %s HSAs). Empty cells (no HSA in that decile pair) are shown in grey and are distinct from populated cells with zero events.",
       n_cell_label, format(n_hsa_universe, big.mark = ",")
     )
   )
+  if (!is.null(axis_spec$note_extra)) {
+    note_parts <- c(note_parts, axis_spec$note_extra)
+  }
+  note_text <- paste(note_parts, collapse = " ")
   
   write_standalone <- function(png_name, title, varwidth = "16in") {
     tex_lines <- c(
@@ -380,27 +505,58 @@ run_decile_grid_heatmaps <- function(
       "\\end{minipage}",
       "\\end{document}"
     )
-    out <- file.path(out_fig_dir, str_replace(png_name, "\\.png$", "_standalone.tex"))
+    out <- file.path(fig_dir, str_replace(png_name, "\\.png$", "_standalone.tex"))
     writeLines(tex_lines, out)
   }
   
-  write_standalone("decile_grid_two_panel.png",
-                   "Hospital Openings (A) and Closures (B) by Poverty and Population-Change Deciles",
-                   varwidth = "20in")
-  write_standalone("decile_grid_bivariate.png",
-                   "Joint Distribution of Hospital Openings and Closures by Poverty and Population-Change Deciles")
-  write_standalone("decile_grid_dot_on_tile.png",
-                   "Hospital Closures (Shading) and Openings (Point Size) by Poverty and Population-Change Deciles")
+  tc <- axis_spec$y_title_case
+  write_standalone(
+    "decile_grid_two_panel.png",
+    sprintf("Hospital Openings (A) and Closures (B) by Poverty and %s", tc),
+    varwidth = "20in"
+  )
+  write_standalone(
+    "decile_grid_bivariate.png",
+    sprintf("Joint Distribution of Hospital Openings and Closures by Poverty and %s", tc)
+  )
+  write_standalone(
+    "decile_grid_dot_on_tile.png",
+    sprintf("Hospital Closures (Shading) and Openings (Point Size) by Poverty and %s", tc)
+  )
   
   message(sprintf(
-    "Wrote 3 figures to %s | openings placed=%s, closures placed=%s, dropped=%s",
-    out_fig_dir, n_open_total, n_close_total, n_dropped
+    "[%s] Wrote 3 figures to %s | window=%s, openings placed=%s, closures placed=%s, dropped=%s",
+    axis_spec$slug, fig_dir, window_str, n_open_total, n_close_total, n_dropped
   ))
   
   invisible(list(
+    axis = axis_spec$slug,
     grid = grid_out,
     plots = list(two_panel = p_two_panel, bivariate = p_bivar, dot_on_tile = p_dot),
     totals = c(openings = n_open_total, closures = n_close_total,
-               dropped = n_dropped, hsa_universe = n_hsa_universe)
+               dropped = n_dropped, hsa_universe = n_hsa_universe),
+    window = c(min = placed_min, max = placed_max)
   ))
+}
+
+# ============================================================================
+# All-axes wrapper (call this from run_project.R)
+# ============================================================================
+
+#' Produce every default axis's figure set in one call.
+#'
+#' Shared arguments (input_csv, out_fig_dir, event files, colours, ...) are
+#' forwarded to each per-axis run via `...`. Each axis writes to its own
+#' out_fig_dir/<slug>/ subdirectory.
+#'
+#' @param specs named list of axis_spec objects
+#' @param ... arguments forwarded to run_decile_grid_heatmaps()
+#' @return named list of per-axis results (invisible)
+run_all_decile_grid_heatmaps <- function(specs = decile_grid_default_specs(), ...) {
+  results <- lapply(names(specs), function(nm) {
+    message("\n=== Decile-grid heatmaps: ", nm, " axis ===")
+    run_decile_grid_heatmaps(axis_spec = specs[[nm]], ...)
+  })
+  names(results) <- names(specs)
+  invisible(results)
 }

@@ -22,3 +22,4 @@ data/
 
 # Keep optional placeholder files if you add them
 !data/**/.gitkeep
+checks/

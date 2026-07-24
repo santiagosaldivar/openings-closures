@@ -22,7 +22,7 @@ suppressPackageStartupMessages({
 run_hospital_characteristics <- function(
   openings_path = "data/interim/openings_clean.csv",
   closures_path = "data/interim/closures_clean.csv",
-  pos_path = "data/processed/pos_panel_updated.csv",
+  pos_path = "data/processed/pos_panel_reconciled.csv",
   out_tex = "outputs/tables/hospital_characteristics.tex",
   out_tex_sensitivity = "outputs/tables/hospital_characteristics_sensitivity.tex",
   out_counts_csv = "outputs/tables/hospital_group_counts.csv",

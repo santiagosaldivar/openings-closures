@@ -40,6 +40,19 @@ if (exists("clean_pos")) {
   message("Skipping POS cleaning (clean_pos() not found).")
 }
 
+if (exists("run_reconcile_pos_panel")) {
+  message("Reconciling POS panel (term_year imputation for curated closures)...")
+  run_reconcile_pos_panel(
+    pos_path      = "data/processed/pos_panel_updated.csv",
+    closures_path = "data/interim/closures_clean.csv",
+    openings_path = "data/interim/openings_clean.csv",
+    out_path      = "data/processed/pos_panel_reconciled.csv",
+    audit_dir     = "checks/output"
+  )
+} else {
+  message("Skipping POS reconciliation (run_reconcile_pos_panel() not found).")
+}
+
 if (exists("calc_zip_areas")) {
   message("Calculating ZCTA areas...")
   calc_zip_areas(
@@ -245,20 +258,19 @@ if (exists("run_descriptive")) {
   message("Skipping descriptive analysis (run_descriptive() not found).")
 }
 
-if (exists("run_decile_grid_heatmaps")) {
-  message("Building decile-grid heatmaps...")
-  run_decile_grid_heatmaps(
-    input_csv     = "data/interim/opening_closure_nonevent_percentiles.csv",
-    out_fig_dir   = "outputs/figures/decile_grids",
-    openings_file = "data/raw/updated_openings_august2025.csv",
-    closures_file = "data/raw/updated_closures_august2025.csv",
+if (exists("run_all_decile_grid_heatmaps")) {
+  message("Building decile-grid heatmaps (all axes)...")
+  run_all_decile_grid_heatmaps(
+    input_csv      = "data/interim/opening_closure_nonevent_percentiles.csv",
+    out_fig_dir    = "outputs/figures/decile_grids",
+    openings_file  = "data/raw/updated_openings_august2025.csv",
+    closures_file  = "data/raw/updated_closures_august2025.csv",
     crosswalk_file = "data/raw/ZipHsaHrr.csv",
-    x_var         = "poverty_percentile",
-    y_var         = "pop_change_pct_percentile",
-    cell_n        = "hsa"
+    x_var          = "poverty_percentile",
+    cell_n         = "hsa"
   )
 } else {
-  message("Skipping decile-grid heatmaps (run_decile_grid_heatmaps() not found).")
+  message("Skipping decile-grid heatmaps (run_all_decile_grid_heatmaps() not found).")
 }
 
 if (exists("run_main_models")) {

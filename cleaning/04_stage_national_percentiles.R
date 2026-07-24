@@ -20,7 +20,7 @@ resolve_input_path <- function(primary_path, label) {
 stage_national_percentiles <- function(
   source_path = "data/raw/ntl_hsa_percentiles.csv",
   interim_dir = "data/interim",
-  pos_path = "data/processed/pos_panel_updated.csv",
+  pos_path = "data/processed/pos_panel_reconciled.csv",
   crosswalk_path = "data/raw/ZipHsaHrr.csv"
 ) {
   resolved <- resolve_input_path(source_path, "National percentile source")

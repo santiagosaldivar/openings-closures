@@ -35,7 +35,7 @@ suppressPackageStartupMessages({
 run_descriptive <- function(
     openings_path = "data/interim/openings_clean.csv",
     closures_path = "data/interim/closures_clean.csv",
-    pos_path = "data/processed/pos_panel_updated.csv",
+    pos_path = "data/processed/pos_panel_reconciled.csv",
     out_dir = "outputs/tables",
     out_pdf = file.path(out_dir, "descriptive_tables.pdf"),
     snapshot_years = c(2010, 2023),
