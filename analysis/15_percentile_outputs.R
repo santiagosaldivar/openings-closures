@@ -51,29 +51,32 @@ build_hsa_panel_assignment <- function(
       ) %>%
       filter(year >= 2010, !is.na(year))
 
+    # The mode is taken over the pooled two-level `geography_type` rather than
+    # the three-level `ruca_grouped`, so Metropolitan and Micropolitan event
+    # ZIPs reinforce one another instead of splitting the urban vote.
     event_class <- bind_rows(openings_events, closures_events) %>%
       left_join(zip_hsa, by = "zip5") %>%
       left_join(ruca, by = "zip5") %>%
       group_by(hsanum, year, group) %>%
-      summarise(ruca_grouped = ocgh_mode_value(ruca_grouped), .groups = "drop")
+      summarise(geography_type = ocgh_mode_value(geography_type), .groups = "drop")
 
     hsa_ruca <- zip_hsa %>%
       left_join(ruca, by = "zip5") %>%
       group_by(hsanum) %>%
-      summarise(ruca_grouped_hsa = ocgh_mode_value(ruca_grouped), .groups = "drop")
+      summarise(geography_type_hsa = ocgh_mode_value(geography_type), .groups = "drop")
 
     return(
       df_all %>%
         left_join(event_class, by = c("hsanum", "year", "group")) %>%
         left_join(hsa_ruca, by = "hsanum") %>%
         mutate(
-          ruca_grouped = if_else(
-            as.character(group) == "non-event" & is.na(ruca_grouped),
-            ruca_grouped_hsa,
-            ruca_grouped
+          geography_type = if_else(
+            as.character(group) == "non-event" & is.na(geography_type),
+            geography_type_hsa,
+            geography_type
           )
         ) %>%
-        select(-ruca_grouped_hsa)
+        select(-geography_type_hsa)
     )
   }
 
@@ -86,7 +89,7 @@ build_hsa_panel_assignment <- function(
       zip_zcta_file = zip_zcta_file,
       census_root = census_root
     ) %>%
-      select(hsanum, year, ruca_grouped)
+      select(hsanum, year, geography_type)
 
     return(df_all %>% left_join(hsa_ruca, by = c("hsanum", "year")))
   }
@@ -99,7 +102,7 @@ build_hsa_panel_assignment <- function(
     zip_zcta_file = zip_zcta_file,
     census_root = census_root
   ) %>%
-    select(hsanum, year, ruca_grouped)
+    select(hsanum, year, geography_type)
 
   df_all %>% left_join(hsa_ruca, by = c("hsanum", "year"))
 }
@@ -114,12 +117,13 @@ panel_assignment_suffix <- function(method) {
 
 panel_assignment_note <- function(method) {
   dplyr::case_when(
-    method == "hsa_zip_count" ~ "Urban/rural panel assignment is based on the plurality RUCA category among ZIP codes within each HSA.",
+    method == "hsa_zip_count" ~ "Urban pools metropolitan and micropolitan RUCA codes. Panel assignment is based on the plurality of the pooled geography among ZIP codes within each HSA.",
     method == "hsa_population_weighted" ~ paste(
-      "Urban/rural panel assignment is based on the plurality RUCA category among ZIP codes within each HSA, weighted by ZIP-level population.",
+      "Urban pools metropolitan and micropolitan RUCA codes.",
+      "Panel assignment is based on the plurality of the pooled geography among ZIP codes within each HSA, weighted by ZIP-level population.",
       "For 2010, 2011 ZIP populations are used because the ZIP-level population series begins in 2011."
     ),
-    TRUE ~ "Urban event rows are classified using event ZIP codes, while non-event rows use modal HSA RUCA assignment."
+    TRUE ~ "Urban pools metropolitan and micropolitan RUCA codes. Event rows are classified using event ZIP codes, while non-event rows use the modal HSA assignment."
   )
 }
 
@@ -138,8 +142,8 @@ resolve_panel_percentile_value <- function(df, var_name, panel_name, panel_assig
 build_panel_long_data <- function(df_all, percentile_cols, row_spec, panel_assignment) {
   panel_frames <- list(
     Overall = df_all,
-    Urban = df_all %>% filter(ruca_grouped == "Metropolitan"),
-    `Rural & Small Town` = df_all %>% filter(ruca_grouped == "Rural & Small Town")
+    Urban = df_all %>% filter(geography_type == "Urban"),
+    `Rural & Small Town` = df_all %>% filter(geography_type == "Rural & Small Town")
   )
 
   bind_rows(lapply(names(panel_frames), function(panel_name) {
@@ -440,12 +444,12 @@ run_percentile_plots <- function(
   }
 
   build_six_panel_violin(
-    df_openings_closures_panel %>% filter(ruca_grouped == "Metropolitan"),
+    df_openings_closures_panel %>% filter(geography_type == "Urban"),
     "Urban Openings and Closures: Socioeconomic Status and Insurance Coverage",
     "urban_openings_closures_six_panel_violin.png"
   )
   build_six_panel_violin(
-    df_openings_closures_panel %>% filter(ruca_grouped == "Rural & Small Town"),
+    df_openings_closures_panel %>% filter(geography_type == "Rural & Small Town"),
     "Rural and Small Town Openings and Closures: Socioeconomic Status and Insurance Coverage",
     "rural_small_town_openings_closures_six_panel_violin.png"
   )

@@ -32,13 +32,55 @@ ocgh_load_ruca_lookup <- function(ruca_file) {
         ruca_simple %in% c("Rural", "Small Town") ~ "Rural & Small Town",
         TRUE ~ ruca_simple
       ),
+      # `Urban` pools Metropolitan and Micropolitan RUCA codes. This is the
+      # two-level analysis variable; `ruca_grouped` retains the Metropolitan /
+      # Micropolitan split for descriptive figures only.
       geography_type = case_when(
-        ruca_simple == "Metropolitan" ~ "Urban",
-        ruca_grouped == "Rural & Small Town" ~ "Rural & Small Town",
-        TRUE ~ ruca_grouped
+        ruca_simple %in% c("Metropolitan", "Micropolitan") ~ "Urban",
+        ruca_simple %in% c("Rural", "Small Town") ~ "Rural & Small Town",
+        TRUE ~ NA_character_
       )
     ) %>%
     distinct(zip5, .keep_all = TRUE)
+}
+
+# Assign each HSA (or HSA-year) a geography and a nested sub-bucket label.
+#
+# `bucket_totals` carries one row per key x ruca_grouped x geography_type with
+# weights `w1` (primary: population or ZIP count) and `w2` (tie-break).
+#
+# Selection is two-stage and strictly nested:
+#   1. Pool Metropolitan and Micropolitan weight into `Urban`, then let `Urban`
+#      compete against `Rural & Small Town`. The larger pooled weight wins.
+#   2. Within the winning geography only, pick the largest sub-bucket to produce
+#      the descriptive `ruca_grouped` label.
+#
+# Pooling before the comparison is what makes `Urban` a genuine pooled category:
+# an HSA whose Metropolitan and Micropolitan populations jointly exceed its
+# Rural & Small Town population is Urban even when neither exceeds it alone.
+# Nesting stage 2 inside the stage 1 winner guarantees that the Metropolitan and
+# Micropolitan counts sum exactly to the Urban count, so the three-line and
+# two-line figures agree by construction.
+#
+# Ties fall to the alphabetically first label, which sends geography ties to
+# `Rural & Small Town` and sub-bucket ties to `Metropolitan`.
+ocgh_select_nested_assignment <- function(bucket_totals, keys) {
+  geography_winner <- bucket_totals %>%
+    group_by(across(all_of(c(keys, "geography_type")))) %>%
+    summarise(w1 = sum(w1), w2 = sum(w2), .groups = "drop") %>%
+    group_by(across(all_of(keys))) %>%
+    arrange(desc(w1), desc(w2), geography_type, .by_group = TRUE) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    select(all_of(c(keys, "geography_type")))
+
+  bucket_totals %>%
+    inner_join(geography_winner, by = c(keys, "geography_type")) %>%
+    group_by(across(all_of(keys))) %>%
+    arrange(desc(w1), desc(w2), ruca_grouped, .by_group = TRUE) %>%
+    slice_head(n = 1) %>%
+    ungroup() %>%
+    select(all_of(c(keys, "ruca_grouped", "geography_type")))
 }
 
 ocgh_load_zip_hsa_lookup <- function(crosswalk_file) {
@@ -101,19 +143,18 @@ ocgh_build_hsa_year_ruca_assignment <- function(
   ruca <- ocgh_load_ruca_lookup(ruca_file)
 
   if (method == "hsa_zip_count") {
+    bucket_totals <- zip_hsa %>%
+      left_join(ruca, by = "zip5") %>%
+      filter(!is.na(geography_type)) %>%
+      group_by(hsanum, ruca_grouped, geography_type) %>%
+      summarise(
+        w1 = n(),
+        w2 = n(),
+        .groups = "drop"
+      )
+
     return(
-      zip_hsa %>%
-        left_join(ruca, by = "zip5") %>%
-        filter(!is.na(ruca_grouped)) %>%
-        group_by(hsanum, ruca_grouped, geography_type) %>%
-        summarise(
-          zip_count = n(),
-          .groups = "drop"
-        ) %>%
-        group_by(hsanum) %>%
-        arrange(desc(zip_count), ruca_grouped, .by_group = TRUE) %>%
-        slice_head(n = 1) %>%
-        ungroup() %>%
+      ocgh_select_nested_assignment(bucket_totals, keys = "hsanum") %>%
         mutate(ruca_simple = ruca_grouped) %>%
         tidyr::crossing(year = sort(unique(as.integer(years)))) %>%
         select(hsanum, year, ruca_simple, ruca_grouped, geography_type)
@@ -133,23 +174,21 @@ ocgh_build_hsa_year_ruca_assignment <- function(
   ) %>%
     distinct(zip5, year, .keep_all = TRUE)
 
-  tidyr::crossing(
+  bucket_totals <- tidyr::crossing(
     year = sort(unique(as.integer(years))),
     zip_hsa
   ) %>%
     left_join(ruca, by = "zip5") %>%
     left_join(zip_year_pop, by = c("zip5", "year")) %>%
-    filter(!is.na(ruca_grouped)) %>%
+    filter(!is.na(geography_type)) %>%
     group_by(hsanum, year, ruca_grouped, geography_type) %>%
     summarise(
-      total_pop = sum(total_pop, na.rm = TRUE),
-      zip_count = n(),
+      w1 = sum(total_pop, na.rm = TRUE),
+      w2 = n(),
       .groups = "drop"
-  ) %>%
-    group_by(hsanum, year) %>%
-    arrange(desc(total_pop), desc(zip_count), ruca_grouped, .by_group = TRUE) %>%
-    slice_head(n = 1) %>%
-    ungroup() %>%
+    )
+
+  ocgh_select_nested_assignment(bucket_totals, keys = c("hsanum", "year")) %>%
     # These HSAs have mechanical ties caused by two ZIPs sharing one ZCTA.
     mutate(
       ruca_grouped = if_else(

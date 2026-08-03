@@ -287,4 +287,40 @@ if (exists("run_maps")) {
   message("Skipping maps (run_maps() not found).")
 }
 
+if (exists("run_event_rate_descriptives")) {
+  run_event_rate_descriptives(
+    path_panel     = file.path("data/interim/opening_closure_nonevent_percentiles.csv"),
+    path_openings  = file.path("data/raw/updated_openings_august2025.csv"),
+    path_closures  = file.path("data/raw/updated_closures_august2025.csv"),
+    path_crosswalk = file.path("data/raw/ZipHsaHrr.csv"),
+    dir_out        = "outputs/tables",
+    year_min       = 2012,
+    year_max       = 2023,
+    baseline_year  = 2012
+  )
+}
+
+if (exists("run_event_regressions")) {
+  run_event_regressions(
+    path_panel     = file.path("data/interim/opening_closure_nonevent_percentiles.csv"),
+    path_openings  = file.path("data/raw/updated_openings_august2025.csv"),
+    path_closures  = file.path("data/raw/updated_closures_august2025.csv"),
+    path_crosswalk = file.path("data/raw/ZipHsaHrr.csv"),
+    path_geo       = NULL,
+    dir_out        = "outputs/tables",
+    dir_checks     = "checks/output",
+    year_min       = 2012,
+    year_max       = 2023
+    )
+}
+
+if (exists("run_event_regression_figures")) {
+  run_event_regression_figures(
+    path_main   = "outputs/tables/event_regressions_main.csv",
+    path_desc   = "outputs/tables/event_rates_descriptive.csv",
+    dir_fig     = "outputs/figures/event_regressions",
+    family_keep = "Poisson"
+    )
+}
+
 message("Pipeline finished.")
