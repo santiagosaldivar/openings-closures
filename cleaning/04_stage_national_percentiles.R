@@ -9,6 +9,19 @@
 #   - New columns: n_facilities, n_facilities_lag1.
 #   - Hard stops added for duplicate ccn-year rows, multi-HSA ZIPs, duplicate
 #     HSA-year rows in the staged file, and non-contiguous year sequences.
+#
+# CHANGES (2010/2011 beds-per-1000 addition):
+#   - certbeds_per_1000_residents_lag1 now populated for 2010 and 2011 using
+#     the 2010 Decennial Census population (data/processed/hsa_census2010_pop.csv,
+#     built by 03b_clean_census2010_pop.R):
+#       * 2010: lagged numerator (2009 beds), CONTEMPORANEOUS denominator
+#         (2010 Census population) -- no 2009 population source exists.
+#       * 2011: fully lagged as usual (2010 beds / 2010 Census population),
+#         flowing through the unlagged 2010 value patched below.
+#   - The POS panel now includes 2009 (see 02_clean_pos.R). 2009 enters ONLY
+#     as a lag-source bed total; it is filtered out of hsa_supply before the
+#     join, so it can never become an observation year in the staged file.
+#   - All other years' definitions are unchanged (ACS denominators, lagged).
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -30,7 +43,8 @@ stage_national_percentiles <- function(
     source_path = "data/raw/ntl_hsa_percentiles.csv",
     interim_dir = "data/interim",
     pos_path = "data/processed/pos_panel_reconciled.csv",
-    crosswalk_path = "data/raw/ZipHsaHrr.csv"
+    crosswalk_path = "data/raw/ZipHsaHrr.csv",
+    census2010_path = "data/processed/hsa_census2010_pop.csv"
 ) {
   resolved <- resolve_input_path(source_path, "National percentile source")
   ntl <- read_csv(resolved, show_col_types = FALSE)
@@ -112,6 +126,28 @@ stage_national_percentiles <- function(
       total_certbeds = if (all(is.na(certbeds))) NA_real_ else sum(certbeds, na.rm = TRUE),
       .groups = "drop"
     )
+
+  # --- 2009 beds: lag source ONLY, never an observation year ------------------
+  # Extracted as one row per HSA, then 2009 is dropped from hsa_supply so the
+  # join below cannot introduce a 2009 row even if the ntl source ever changed.
+  beds_2009 <- hsa_supply %>%
+    filter(year == 2009L) %>%
+    select(hsanum, total_certbeds_2009 = total_certbeds)
+
+  hsa_supply <- hsa_supply %>%
+    filter(year >= 2010L)
+
+  # --- 2010 Decennial Census population (denominator for 2010/2011) ----------
+  census2010_resolved <- resolve_input_path(census2010_path, "HSA 2010 Census population")
+  hsa_pop2010 <- read_csv(census2010_resolved, show_col_types = FALSE) %>%
+    transmute(
+      hsanum = as.integer(hsanum),
+      pop2010_census = as.numeric(pop2010_census)
+    )
+  dup_pop_hsa <- hsa_pop2010 %>% count(hsanum) %>% filter(n > 1) %>% nrow()
+  if (dup_pop_hsa > 0) {
+    stop(dup_pop_hsa, " duplicate hsanum row(s) in HSA 2010 Census population file.")
+  }
   
   # Positional lag() below is only correct when each HSA's years are contiguous.
   gaps <- ntl %>%
@@ -132,6 +168,8 @@ stage_national_percentiles <- function(
   
   ntl <- ntl %>%
     left_join(hsa_supply, by = c("hsanum", "year")) %>%
+    left_join(hsa_pop2010, by = "hsanum") %>%
+    left_join(beds_2009, by = "hsanum") %>%
     arrange(hsanum, year) %>%
     group_by(hsanum) %>%
     mutate(
@@ -140,13 +178,40 @@ stage_national_percentiles <- function(
         (total_certbeds / sum_total_pop_event) * 1000,
         NA_real_
       ),
+      # 2010: the ACS ZCTA population series begins in 2011, so
+      # sum_total_pop_event is NA in 2010 and the line above yields NA. Patch
+      # the contemporaneous 2010 value with the 2010 Decennial Census
+      # denominator. Via lag() below, this also supplies the fully-lagged 2011
+      # value (2010 beds / 2010 Census population).
+      certbeds_per_1000_residents = if_else(
+        year == 2010L & !is.na(total_certbeds) &
+          !is.na(pop2010_census) & pop2010_census > 0,
+        (total_certbeds / pop2010_census) * 1000,
+        certbeds_per_1000_residents
+      ),
       certbeds_per_1000_residents_lag1 = lag(certbeds_per_1000_residents),
+      # 2010 lagged value: numerator lagged (2009 beds), denominator NOT
+      # lagged (2010 Census population) -- no 2009 population source exists in
+      # the pipeline. This is the ONLY place 2009 data enter; 2009 is never an
+      # observation year. NA-preserving guards match the conventions above.
+      certbeds_per_1000_residents_lag1 = if_else(
+        year == 2010L,
+        if_else(
+          !is.na(total_certbeds_2009) & !is.na(pop2010_census) & pop2010_census > 0,
+          (total_certbeds_2009 / pop2010_census) * 1000,
+          NA_real_
+        ),
+        certbeds_per_1000_residents_lag1
+      ),
       # NEW. Left NA-preserving here, matching the total_certbeds convention.
       # Zero-fill for the closure risk set happens downstream in the analysis
       # script, where the at-risk logic lives.
       n_facilities_lag1 = lag(n_facilities)
     ) %>%
-    ungroup()
+    ungroup() %>%
+    # Helper columns dropped so the staged schema is unchanged apart from the
+    # newly populated 2010/2011 values.
+    select(-pop2010_census, -total_certbeds_2009)
   
   dir.create(interim_dir, recursive = TRUE, showWarnings = FALSE)
   dest <- file.path(interim_dir, "ntl_hsa_percentiles.csv")

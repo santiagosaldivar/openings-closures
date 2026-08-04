@@ -60,7 +60,11 @@ clean_pos <- function(
     ) %>%
     filter(
       specialty_hosp != 1,
-      between(year, 2010, 2023)
+      # 2009 is retained ONLY as a lag source for the 2010 value of
+      # certbeds_per_1000_residents_lag1 (see 04_stage_national_percentiles.R).
+      # It must never appear as an observation year in any analysis sample;
+      # downstream consumers filter to 2010+ explicitly.
+      between(year, 2009, 2023)
     ) %>%
     filter(is.na(control) | !(control %in% c(3, 10))) %>%
     anti_join(excluded_hospitals, by = c("hospname" = "name"))

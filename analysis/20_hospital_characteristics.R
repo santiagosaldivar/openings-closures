@@ -34,7 +34,11 @@ run_hospital_characteristics <- function(
 
   openings <- read_csv(openings_path, show_col_types = FALSE)
   closures <- read_csv(closures_path, show_col_types = FALSE)
-  pos_panel_updated <- read_csv(pos_path, show_col_types = FALSE)
+  pos_panel_updated <- read_csv(pos_path, show_col_types = FALSE) %>%
+    # The POS panel now includes 2009 solely as a lag source for the 2010
+    # beds-per-1000 value (see 02_clean_pos.R). It must not enter any
+    # analysis sample; this table covers 2010-2023.
+    filter(between(year, 2010, 2023))
 
   openings <- openings %>%
     select(opening, ccn, part_year)

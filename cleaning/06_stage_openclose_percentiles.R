@@ -1,5 +1,13 @@
 # Build opening/closure/nonevent percentile table from event HSAs + national percentiles.
 # Usage: source("cleaning/06_stage_openclose_percentiles.R"); stage_openclose_percentiles()
+#
+# NOTE (beds-per-1000 coverage): certbeds_per_1000_residents_lag1 is populated
+# from 2010 onward (previously 2012). The 2010 value uses 2009 beds over the
+# 2010 Decennial Census population (contemporaneous denominator); 2011 uses
+# 2010 beds over 2010 Census population; 2012+ use lagged ACS denominators as
+# before (see 04_stage_national_percentiles.R). The within-year percentile
+# ranking below therefore now yields beds percentiles for 2010 and 2011 too;
+# no code change was needed here.
 
 suppressPackageStartupMessages({
   library(dplyr)

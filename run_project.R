@@ -63,6 +63,18 @@ if (exists("calc_zip_areas")) {
   message("Skipping ZCTA area calculation (calc_zip_areas() not found).")
 }
 
+if (exists("clean_census2010_pop")) {
+  message("Building HSA-level 2010 Decennial Census population...")
+  clean_census2010_pop(
+    census_file = "data/raw/census_raw_data/DECENNIALSF12010/DECENNIALSF12010.P1-Data.csv",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    zip_zcta_file = "data/raw/ZIPCodetoZCTACrosswalk2022UDS.xlsx",
+    output_path = "data/processed/hsa_census2010_pop.csv"
+  )
+} else {
+  message("Skipping 2010 Census population staging (clean_census2010_pop() not found).")
+}
+
 if (exists("stage_national_percentiles")) {
   message("Staging national percentiles file...")
   stage_national_percentiles(
@@ -300,27 +312,42 @@ if (exists("run_event_rate_descriptives")) {
   )
 }
 
-if (exists("run_event_regressions")) {
-  run_event_regressions(
-    path_panel     = file.path("data/interim/opening_closure_nonevent_percentiles.csv"),
-    path_openings  = file.path("data/raw/updated_openings_august2025.csv"),
-    path_closures  = file.path("data/raw/updated_closures_august2025.csv"),
-    path_crosswalk = file.path("data/raw/ZipHsaHrr.csv"),
-    path_geo       = NULL,
-    dir_out        = "outputs/tables",
-    dir_checks     = "checks/output",
-    year_min       = 2012,
-    year_max       = 2023
-    )
-}
+#if (exists("run_event_regressions")) {
+#  run_event_regressions(
+#    path_panel     = file.path("data/interim/opening_closure_nonevent_percentiles.csv"),
+#    path_openings  = file.path("data/raw/updated_openings_august2025.csv"),
+#    path_closures  = file.path("data/raw/updated_closures_august2025.csv"),
+#    path_crosswalk = file.path("data/raw/ZipHsaHrr.csv"),
+#    path_geo       = NULL,
+#    dir_out        = "outputs/tables",
+#    dir_checks     = "checks/output",
+#    year_min       = 2012,
+#    year_max       = 2023
+#    )
+#}
 
-if (exists("run_event_regression_figures")) {
-  run_event_regression_figures(
-    path_main   = "outputs/tables/event_regressions_main.csv",
-    path_desc   = "outputs/tables/event_rates_descriptive.csv",
-    dir_fig     = "outputs/figures/event_regressions",
-    family_keep = "Poisson"
-    )
+#if (exists("run_event_regression_figures")) {
+#  run_event_regression_figures(
+#    path_main   = "outputs/tables/event_regressions_main.csv",
+#    path_desc   = "outputs/tables/event_rates_descriptive.csv",
+#    dir_fig     = "outputs/figures/event_regressions",
+#    family_keep = "Poisson"
+#    )
+#}
+
+if (exists("run_beds2010_decile_events")) {
+  message("Building baseline-2010 beds decile event chart...")
+  run_beds2010_decile_events(
+    national_percentiles_file = "data/interim/ntl_hsa_percentiles.csv",
+    openings_file  = "data/raw/updated_openings_august2025.csv",
+    closures_file  = "data/raw/updated_closures_august2025.csv",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    out_fig = "outputs/figures/beds2010_decile_events.png",
+    out_hist = "outputs/figures/beds2010_baseline_histogram.png",
+    out_csv = "outputs/tables/beds2010_decile_events.csv"
+  )
+} else {
+  message("Skipping baseline-2010 beds decile event chart (run_beds2010_decile_events() not found).")
 }
 
 message("Pipeline finished.")

@@ -1593,7 +1593,7 @@ run_appendix_tables <- function(
     "    \\begin{tablenotes}",
     "      \\small",
     "      \\item \\textit{Note:} This table reports the median of each HSA-level community characteristic for odd-numbered years from 2011 through 2023, computed across all HSAs in the national sample. HSA-level values are population-weighted averages of ZIP-code-level data, and median household income is reported in nominal dollars.",
-    "      \\item Certified beds per 1,000 residents is based on the prior calendar year; data are available from 2012, so the first value shown is 2013. Blank entries throughout indicate years in which data are unavailable due to ACS coverage limitations. Population density is measured as persons per square mile.",
+    "      \\item Certified beds per 1,000 residents uses the prior calendar year's certified bed count and is available from 2010 onward. Population denominators are lagged ACS 5-year estimates from 2012 onward; for 2010 and 2011 the denominator is the 2010 Decennial Census population, and the 2010 value pairs 2009 beds with the contemporaneous (non-lagged) 2010 Census population because no 2009 population source exists. Blank entries throughout indicate years in which data are unavailable due to ACS coverage limitations. Population density is measured as persons per square mile.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )
