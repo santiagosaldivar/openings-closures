@@ -40,6 +40,41 @@ the denominator is the 2010 Decennial Census population; 2011-2023 use ACS
 5-year denominators. This column is an intermediate; the lagged column above
 is the variable of record for ranking and analysis.
 
+### `population_density`
+
+HSA residents per square mile: HSA-summed population over HSA-summed ZCTA land
+area (`data/processed/zctas_with_area.csv`), built in
+`cleaning/10_rebuild_ntl_hsa_percentiles_from_raw.R`.
+
+| Year(s) | Population source |
+|---|---|
+| 2010 | 2010 Decennial Census (SF1 P1), ZCTA-level |
+| 2011-2023 | ACS 5-year `B01003`, ZCTA-level (`sum_total_pop_event`) |
+
+Both sums are restricted to the same area-complete ZCTA set (rows with
+non-missing area and non-missing population), so the 2010 value is
+compositionally consistent with 2011+. Density is a level, so the Census
+substitution follows the same logic as the beds-per-1,000 denominator above.
+
+### `pop_change_pct`
+
+Trailing population change for staged year `t`:
+`100 * (pop_{t-1} - pop_{t-3}) / pop_{t-3}`, over ACS 5-year HSA populations
+(`sum_total_pop_event`). **First valid year: 2014** (needs the 2011 ACS value
+as the `t-3` lag).
+
+**Deliberately not extended with the 2010 Decennial Census.** An ACS 5-year
+estimate behaves like a population level at its window midpoint, so the
+ACS-only formula compares midpoints roughly two years apart. The only value
+the Census could add is 2013 = (ACS 2012 - Census 2010) / Census 2010; ACS
+2012 (2008-2012) has midpoint ~2010 and the Census is April 2010, so that
+"change" would span roughly zero years and be biased toward zero relative to
+every other year, ranking 2013 events artificially near the middle of the
+growth-percentile distribution. `sum_total_pop_event` is left NA for 2010 in
+the rebuild so the lag-based formula cannot pick the Census value up. The
+Census is used only for level variables (beds per 1,000, urbanicity weights,
+population density).
+
 ## `data/interim/opening_closure_nonevent_percentiles.csv`
 
 ### `certbeds_per_1000_residents_percentile` (and `_geo`, `_geo_zip_count` variants)

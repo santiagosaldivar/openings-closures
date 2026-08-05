@@ -121,7 +121,7 @@ panel_assignment_note <- function(method) {
     method == "hsa_population_weighted" ~ paste(
       "Urban pools metropolitan and micropolitan RUCA codes.",
       "Panel assignment is based on the plurality of the pooled geography among ZIP codes within each HSA, weighted by ZIP-level population.",
-      "For 2010, 2011 ZIP populations are used because the ZIP-level population series begins in 2011."
+      "ZIP-level population weights are drawn from the 2010 Decennial Census for 2010 and from ACS 5-year estimates for 2011-2023."
     ),
     TRUE ~ "Urban pools metropolitan and micropolitan RUCA codes. Event rows are classified using event ZIP codes, while non-event rows use the modal HSA assignment."
   )

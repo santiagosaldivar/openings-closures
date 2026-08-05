@@ -8,6 +8,16 @@
 # before (see 04_stage_national_percentiles.R). The within-year percentile
 # ranking below therefore now yields beds percentiles for 2010 and 2011 too;
 # no code change was needed here.
+#
+# NOTE (2010 population_density coverage): population_density is now also
+# populated for 2010, using the 2010 Decennial Census population over the
+# area-complete ZCTA set (see 10_rebuild_ntl_hsa_percentiles_from_raw.R), so
+# the ranking below yields density percentiles for 2010 events too. By
+# contrast, pop_change_pct intentionally still begins in 2014: the Census is
+# a point-in-time count while ACS 5-year estimates are window-midpoint levels,
+# so a Census-anchored 2013 change would span ~zero years and rank 2013 events
+# artificially near the middle of the growth distribution. No code change was
+# needed here either.
 
 suppressPackageStartupMessages({
   library(dplyr)

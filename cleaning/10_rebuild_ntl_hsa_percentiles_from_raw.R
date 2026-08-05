@@ -4,6 +4,24 @@
 # Usage:
 #   source("cleaning/10_rebuild_ntl_hsa_percentiles_from_raw.R")
 #   rebuild_ntl_hsa_percentiles_from_raw()
+#
+# CHANGES (2010 population_density addition):
+#   - population_density is now populated for 2010 using the 2010 Decennial
+#     Census (SF1 P1) ZCTA populations: Census population / summed ZCTA land
+#     area, restricted to the same area-complete ZCTA set used for ACS years
+#     (only rows with non-missing AREA_SQ_MI and non-missing population enter
+#     either sum), so 2010 is compositionally consistent with 2011+.
+#   - pop_change_pct is DELIBERATELY unchanged (first valid year remains 2014).
+#     The Census count is a point-in-time level (April 2010), while ACS 5-year
+#     estimates behave like levels at their window midpoints. The only value
+#     the Census could add is 2013 = (ACS 2012 - Census 2010) / Census 2010,
+#     but ACS 2012 (2008-2012) has midpoint ~2010, so that "change" spans
+#     roughly zero years and would be biased toward zero relative to every
+#     other year's effective 2-year window. sum_total_pop_event is therefore
+#     left NA for 2010 so the lag-based pop_change_pct cannot pick it up.
+#     Census 2010 is used only for LEVEL variables (beds per 1,000 in
+#     04_stage_national_percentiles.R, urbanicity weights in
+#     00_shared_urbanicity_helpers.R, and population_density here).
 
 suppressPackageStartupMessages({
   library(dplyr)
@@ -32,15 +50,46 @@ read_acs_slice <- function(file_path, named_map) {
   df <- read_csv(file_path, show_col_types = FALSE, progress = FALSE)
   if (!"NAME" %in% names(df)) return(NULL)
 
+  # named_map is oriented c(raw_acs_code = standardized_name) at every call
+  # site. select() needs the raw codes (names), but rename(any_of()) needs
+  # c(new_name = "old_name"), i.e. c(standardized_name = raw_acs_code), so the
+  # vector must be reversed here. Passing named_map directly makes the rename
+  # a silent no-op (any_of tolerates the missing standardized names), leaving
+  # raw ACS codes that break the *_event renames downstream.
   df <- df %>%
     mutate(zcta = str_extract(NAME, "(?<=ZCTA5\\s)\\d+")) %>%
     select(any_of(c("zcta", names(named_map)))) %>%
-    rename(any_of(named_map))
+    rename(any_of(setNames(names(named_map), unname(named_map))))
 
   for (col in setdiff(names(df), "zcta")) {
     df[[col]] <- safe_numeric(df[[col]])
   }
   df
+}
+
+# Parse the 2010 Decennial SF1 P1 ZCTA file to (zcta, pop2010).
+# Mirrors the parsing in 03b_clean_census2010_pop.R: row 2 of the file is a
+# human-readable descriptor row and must be dropped before casting P001001.
+read_decennial_zcta_pop <- function(census_path) {
+  raw <- read_csv(
+    census_path,
+    col_types = cols(.default = col_character()),
+    show_col_types = FALSE
+  )
+  required_cols <- c("NAME", "P001001")
+  missing_cols <- setdiff(required_cols, names(raw))
+  if (length(missing_cols) > 0) {
+    stop("Decennial P1 file is missing required columns: ",
+         paste(missing_cols, collapse = ", "))
+  }
+  raw %>%
+    slice(-1) %>%
+    transmute(
+      zcta = str_remove(NAME, "^ZCTA5\\s+"),
+      pop2010 = suppressWarnings(as.numeric(P001001))
+    ) %>%
+    filter(str_detect(zcta, "^\\d{5}$")) %>%
+    distinct(zcta, .keep_all = TRUE)
 }
 
 load_sdi_panel <- function(sdi_root) {
@@ -324,6 +373,50 @@ rebuild_ntl_hsa_percentiles_from_raw <- function(
       )
     ) %>%
     ungroup()
+
+  # --- 2010 population_density patch (2010 Decennial Census) -----------------
+  # The ACS ZCTA population series begins in 2011, so sum_total_pop_event and
+  # therefore population_density are NA for 2010 above. Patch 2010 density
+  # (a LEVEL, like beds per 1,000) with the 2010 Census population over the
+  # same area-complete ZCTA set used for ACS years: only (hsanum, zcta) rows
+  # with non-missing AREA_SQ_MI and non-missing Census population enter either
+  # sum, mirroring the strict_sums if_all() filter. sum_total_pop_event is
+  # deliberately left NA for 2010 so pop_change_pct (lag-based, above) still
+  # begins in 2014; see the header note on the window-midpoint problem.
+  census2010_path <- resolve_file(
+    file.path(census_root, "DECENNIALSF12010", "DECENNIALSF12010.P1-Data.csv"),
+    "2010 Decennial SF1 P1 file"
+  )
+  census2010_zcta <- read_decennial_zcta_pop(census2010_path)
+
+  density_2010 <- percentile_df %>%
+    filter(year == 2010) %>%
+    distinct(hsanum, zcta, AREA_SQ_MI) %>%
+    inner_join(census2010_zcta, by = "zcta") %>%
+    filter(!is.na(AREA_SQ_MI), !is.na(pop2010)) %>%
+    group_by(hsanum) %>%
+    summarise(
+      pop2010_areacomplete = sum(pop2010),
+      area2010 = sum(AREA_SQ_MI),
+      .groups = "drop"
+    ) %>%
+    filter(area2010 > 0) %>%
+    transmute(
+      hsanum,
+      year = 2010L,
+      population_density_2010 = pop2010_areacomplete / area2010
+    )
+
+  ntl_hsa_percentiles <- ntl_hsa_percentiles %>%
+    left_join(density_2010, by = c("hsanum", "year")) %>%
+    mutate(
+      population_density = ifelse(
+        year == 2010L & is.na(population_density) & !is.na(population_density_2010),
+        population_density_2010,
+        population_density
+      )
+    ) %>%
+    select(-population_density_2010)
 
   validate_ntl_hsa_percentiles(ntl_hsa_percentiles)
 

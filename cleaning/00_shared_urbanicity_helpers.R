@@ -122,8 +122,39 @@ ocgh_load_zip_year_population <- function(
       )
   }
 
+  # 2010: true ZCTA population from the 2010 Decennial Census (SF1 P1).
+  # This replaces the earlier proxy that duplicated 2011 ACS rows as 2010.
+  # File format: row 1 column names, row 2 human-readable descriptors (dropped,
+  # never parsed as data), rows 3+ one row per ZCTA; NAME is "ZCTA5 00601".
+  read_decennial_2010 <- function() {
+    file_path <- file.path(
+      census_root,
+      "DECENNIALSF12010",
+      "DECENNIALSF12010.P1-Data.csv"
+    )
+    if (!file.exists(file_path)) {
+      stop("2010 Decennial SF1 P1 file not found at: ", file_path,
+           " (required for 2010 population-weighted urbanicity assignment).")
+    }
+    read_csv(
+      file_path,
+      col_types = cols(.default = col_character()),
+      show_col_types = FALSE, progress = FALSE
+    ) %>%
+      slice(-1) %>%
+      transmute(
+        zcta = str_remove(NAME, "^ZCTA5\\s+"),
+        total_pop = suppressWarnings(as.numeric(P001001))
+      ) %>%
+      filter(str_detect(zcta, "^\\d{5}$")) %>%
+      mutate(year = 2010L)
+  }
+
   b01003_years <- 2011:2023
-  bind_rows(lapply(b01003_years, read_b01003)) %>%
+  bind_rows(
+    read_decennial_2010(),
+    bind_rows(lapply(b01003_years, read_b01003))
+  ) %>%
     left_join(zip_zcta, by = "zcta", relationship = "many-to-many") %>%
     filter(!is.na(zip5)) %>%
     select(zip5, year, total_pop) %>%
@@ -161,18 +192,14 @@ ocgh_build_hsa_year_ruca_assignment <- function(
     )
   }
 
+  # ZIP-year population weights: 2010 from the 2010 Decennial Census, 2011-2023
+  # from ACS 5-year B01003 (see ocgh_load_zip_year_population). The former
+  # 2011-as-2010 proxy duplication was removed when the Decennial source was
+  # added.
   zip_year_pop <- ocgh_load_zip_year_population(
     zip_zcta_file = zip_zcta_file,
     census_root = census_root
   )
-
-  zip_year_pop <- bind_rows(
-    zip_year_pop,
-    zip_year_pop %>%
-      filter(year == 2011L) %>%
-      mutate(year = 2010L)
-  ) %>%
-    distinct(zip5, year, .keep_all = TRUE)
 
   bucket_totals <- tidyr::crossing(
     year = sort(unique(as.integer(years))),

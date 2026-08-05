@@ -178,6 +178,18 @@ if (exists("build_event_counts_by_census_region")) {
   message("Skipping Census region opening/closure counts (build_event_counts_by_census_region() not found).")
 }
 
+if (exists("build_active_hospitals_by_census_region")) {
+  message("Building unique active hospital counts by Census region...")
+  build_active_hospitals_by_census_region(
+    pos_path = "data/processed/pos_panel_reconciled.csv",
+    zip_hsa_path = "data/raw/ZipHsaHrr.csv",
+    census_region_path = "data/raw/census_division_crosswalk.csv",
+    out_csv = "outputs/tables/census_region/active_hospitals_by_census_region.csv"
+  )
+} else {
+  message("Skipping active hospital counts by Census region (build_active_hospitals_by_census_region() not found).")
+}
+
 if (exists("run_hospital_characteristics")) {
   message("Building hospital characteristics table...")
   run_hospital_characteristics(
@@ -348,6 +360,14 @@ if (exists("run_beds2010_decile_events")) {
   )
 } else {
   message("Skipping baseline-2010 beds decile event chart (run_beds2010_decile_events() not found).")
+}
+
+# 3) Manuscript staging (runs last so all figures/tables above are current)
+if (exists("stage_manuscript_outputs")) {
+  message("Staging manuscript-ready figures and tables...")
+  stage_manuscript_outputs(dest_dir = "outputs/manuscript")
+} else {
+  message("Skipping manuscript staging (stage_manuscript_outputs() not found).")
 }
 
 message("Pipeline finished.")

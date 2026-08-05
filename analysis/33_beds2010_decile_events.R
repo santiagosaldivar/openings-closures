@@ -149,22 +149,16 @@ run_beds2010_decile_events <- function(
       name = NULL
     ) +
     scale_x_continuous(expand = expansion(mult = c(0, 0.10))) +
+    # Title and subtitle intentionally omitted; captioning is done in Overleaf.
     labs(
       x = paste0("Hospital events, ", event_year_min, "-", event_year_max),
-      y = "Decile of baseline beds per 1,000 residents (2010)",
-      title = "Hospital openings and closures by baseline hospital-bed supply",
-      subtitle = paste0(
-        "Deciles of HSA certified beds per 1,000 residents at 2010 baseline\n",
-        "(2009 beds over 2010 Decennial Census population); events ",
-        event_year_min, "-", event_year_max, "."
-      )
+      y = "Decile of baseline beds per 1,000 residents (2010)"
     ) +
     theme_minimal(base_size = 11) +
     theme(
       panel.grid.major.y = element_blank(),
       panel.grid.minor = element_blank(),
-      legend.position = "top",
-      plot.title.position = "plot"
+      legend.position = "top"
     )
 
   # --- Histogram of the 2010 baseline distribution ---------------------------
