@@ -268,6 +268,18 @@ if (exists("run_appendix_tables")) {
   )
 }
 
+if (exists("run_baseline_urbanicity_split")) {
+  message("Counting baseline hospitals and opening percentages by hospital ZIP RUCA...")
+  run_baseline_urbanicity_split(
+    pos_path = "data/processed/pos_panel_updated.csv",
+    openings_path = "data/interim/openings_clean.csv",
+    baseline_year = 2010L,
+    event_years = 2010:2023
+  )
+} else {
+  message("Skipping baseline urbanicity split (run_baseline_urbanicity_split() not found).")
+}
+
 if (exists("run_descriptive")) {
   message("Running descriptive analysis...")
   run_descriptive(
@@ -358,8 +370,34 @@ if (exists("run_beds2010_decile_events")) {
     out_hist = "outputs/figures/beds2010_baseline_histogram.png",
     out_csv = "outputs/tables/beds2010_decile_events.csv"
   )
+
+  message("Building baseline-2010 beds decile event chart, split by poverty...")
+  run_beds2010_decile_events(
+    national_percentiles_file = "data/interim/ntl_hsa_percentiles.csv",
+    openings_file  = "data/raw/updated_openings_august2025.csv",
+    closures_file  = "data/raw/updated_closures_august2025.csv",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    out_fig = "outputs/figures/beds2010_decile_events_by_poverty.png",
+    out_csv = "outputs/tables/beds2010_decile_events_by_poverty.csv",
+    split_by_poverty = TRUE
+  )
 } else {
   message("Skipping baseline-2010 beds decile event chart (run_beds2010_decile_events() not found).")
+}
+
+if (exists("run_popchange_decile_events")) {
+  message("Building population-change decile event chart, split by poverty...")
+  run_popchange_decile_events(
+    input_csv      = "data/interim/opening_closure_nonevent_percentiles.csv",
+    openings_file  = "data/raw/updated_openings_august2025.csv",
+    closures_file  = "data/raw/updated_closures_august2025.csv",
+    crosswalk_file = "data/raw/ZipHsaHrr.csv",
+    out_fig = "outputs/figures/popchange_decile_events_by_poverty.png",
+    out_hist = "outputs/figures/popchange2014_baseline_histogram.png",
+    out_csv = "outputs/tables/popchange_decile_events_by_poverty.csv"
+  )
+} else {
+  message("Skipping population-change decile event chart (run_popchange_decile_events() not found).")
 }
 
 # 3) Manuscript staging (runs last so all figures/tables above are current)

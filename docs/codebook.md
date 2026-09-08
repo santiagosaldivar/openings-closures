@@ -82,3 +82,14 @@ population density).
 Within-year percentile ranks of `certbeds_per_1000_residents_lag1`, built in
 `cleaning/06_stage_openclose_percentiles.R`. Populated 2010-2023; the 2010
 pool inherits the contemporaneous-denominator convention flagged above.
+
+### `pop_change_pct_percentile`
+
+Within-year percentile ranks of `pop_change_pct`, built in
+`cleaning/06_stage_openclose_percentiles.R`. Populated 2014-2023 only, because
+the underlying trailing ACS population-change measure first becomes valid in
+2014. `analysis/33_beds2010_decile_events.R` converts the 2014 percentile to
+ten fixed baseline deciles for `popchange_decile_events_by_poverty.png`; its
+2014-2023 event window is therefore a data-availability restriction, not a
+separate sample-selection choice. The 2014 population-change value is the
+change from the 2011 to 2013 ACS population estimates.

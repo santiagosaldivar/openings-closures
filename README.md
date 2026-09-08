@@ -78,3 +78,21 @@ For this optional full rebuild, include these in `data/raw/`:
 ## Notes
 
 - To be updated as necessary. 
+
+## Baseline hospital urbanicity
+
+`analysis/baseline_urbanicity_split.R` (moved from the archive) runs through
+`run_project.R` after cleaning. It counts unique active CCNs in 2010 from
+`pos_panel_updated.csv`, using hospital ZIP RUCA 2010 classifications.
+Urban combines metropolitan and micropolitan; rural/small town combines RUCA 7–10.
+These are hospital ZIP classifications, distinct from the HSA-level urbanicity
+used elsewhere in the analysis. Unmatched ZIPs are reported separately.
+The script divides cleaned opening events in 2010–2023 by each baseline count.
+
+Outputs: `outputs/tables/baseline_urbanicity_split.csv` and
+`outputs/figures/ruca_distribution_baseline.png`.
+With cleaned inputs available, run just this analysis from the project root:
+
+```bash
+Rscript -e "source('analysis/baseline_urbanicity_split.R'); run_baseline_urbanicity_split()"
+```

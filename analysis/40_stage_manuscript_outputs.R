@@ -16,6 +16,10 @@ stage_manuscript_outputs <- function(dest_dir = "outputs/manuscript") {
       "outputs/figures/beds2010_baseline_histogram.png",
     "beds2010_decile_events.png" =
       "outputs/figures/beds2010_decile_events.png",
+    "popchange_decile_events_by_poverty.png" =
+      "outputs/figures/popchange_decile_events_by_poverty.png",
+    "popchange2014_baseline_histogram.png" =
+      "outputs/figures/popchange2014_baseline_histogram.png",
     "opening_closure_counts_by_census_region_poster_hires.png" =
       "outputs/figures/census_region/opening_closure_counts_by_census_region_poster_hires.png",
     "combined_hospital_activity_2way.png" =
