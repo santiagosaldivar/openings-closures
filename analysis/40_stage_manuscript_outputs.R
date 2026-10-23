@@ -16,6 +16,8 @@ stage_manuscript_outputs <- function(dest_dir = "outputs/manuscript") {
       "outputs/figures/beds2010_baseline_histogram.png",
     "beds2010_decile_events.png" =
       "outputs/figures/beds2010_decile_events.png",
+    "beds2010_decile_events_by_poverty.png" =
+      "outputs/figures/beds2010_decile_events_by_poverty.png",
     "popchange_decile_events_by_poverty.png" =
       "outputs/figures/popchange_decile_events_by_poverty.png",
     "popchange2014_baseline_histogram.png" =
@@ -47,7 +49,17 @@ stage_manuscript_outputs <- function(dest_dir = "outputs/manuscript") {
     "brief_summary_table_hsa_population_weighted_standalone.tex" =
       "outputs/tables/brief_summary_table_hsa_population_weighted_standalone.tex",
     "hospital_characteristics.tex" =
-      "outputs/tables/hospital_characteristics.tex"
+      "outputs/tables/hospital_characteristics.tex",
+    "hospital_characteristics_with_rural.tex" =
+      "outputs/tables/hospital_characteristics_with_rural.tex",
+    "hospital_characteristics_sensitivity.tex" =
+      "outputs/tables/hospital_characteristics_sensitivity.tex",
+    "hospital_characteristics_sensitivity_with_rural.tex" =
+      "outputs/tables/hospital_characteristics_sensitivity_with_rural.tex",
+    "hospital_characteristics_methods.md" =
+      "outputs/tables/hospital_characteristics_methods.md",
+    "hospital_characteristics_event_coverage.csv" =
+      "outputs/tables/hospital_characteristics_event_coverage.csv"
   )
 
   dir.create(dest_dir, recursive = TRUE, showWarnings = FALSE)

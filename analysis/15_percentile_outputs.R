@@ -786,7 +786,7 @@ run_kw_final_table <- function(
     "      \\item \\textit{Note:} Entries in the Closure Mean and Opening Mean columns report the mean within-year percentile for the event group. Stars appended to those means indicate the Benjamini-Hochberg adjusted significance of the event-group versus non-event Kruskal-Wallis comparison for that variable within the panel.",
     "      \\item The Open vs. Close column reports the Benjamini-Hochberg adjusted significance of the Kruskal-Wallis comparison of closure and opening percentile distributions within the panel. Across the table, * denotes adjusted p$<$0.05, ** denotes adjusted p$<$0.01, and *** denotes adjusted p$<$0.001; blank entries indicate adjusted p$\\geq$0.05 or unavailable tests.",
     "      \\item Benjamini-Hochberg correction is applied within each geography type $\\times$ comparison type $\\times$ measure group family. Measure groups correspond to Socioeconomic Status, Demographics, and Insurance Coverage.",
-    "      \\item Urban is Metropolitan. Rural panel includes Rural and Small Town. Overall includes all records, including rows without RUCA matches. N counts are variable-specific event-group observation counts; detailed event and non-event counts appear in the appendix.",
+    "      \\item Rural panel includes Rural and Small Town. Overall includes all records, including rows without RUCA matches. N counts are variable-specific event-group observation counts.",
     sprintf("      \\item %s", panel_assignment_note(panel_assignment)),
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
@@ -1569,8 +1569,9 @@ run_appendix_tables <- function(
     "    \\end{tabular}",
     "    \\begin{tablenotes}",
     "      \\small",
-    "      \\item \\textit{Note:} This table reports the minimum, 25th percentile, median, 75th percentile, and maximum of HSA-level community characteristics in 2016, across all HSAs with available data. HSA-level values are population-weighted averages of ZIP-code-level data.",
+    "      \\item \\textit{Note:} This table reports the minimum, 25th percentile, median, 75th percentile, and maximum of HSA-level community characteristics in 2016, across all HSAs with available data. Socioeconomic and demographic characteristics are aggregated from ZCTAs to HSAs using variable-specific population denominators: the non-institutionalized population for insurance coverage, the civilian labor force for unemployment, the population aged 25 years and older for educational attainment, and the population for whom poverty status was determined for poverty. Median household income and the social deprivation index are weighted by total population.",
     "      \\item Certified beds per 1,000 residents reflects 2015 certified bed counts. Population density is measured as persons per square mile, and median household income is reported in nominal dollars.",
+    "      \\item Zero values are excluded from the income and population-density summaries.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )
@@ -1592,8 +1593,9 @@ run_appendix_tables <- function(
     "    \\end{tabular}",
     "    \\begin{tablenotes}",
     "      \\small",
-    "      \\item \\textit{Note:} This table reports the median of each HSA-level community characteristic for odd-numbered years from 2011 through 2023, computed across all HSAs in the national sample. HSA-level values are population-weighted averages of ZIP-code-level data, and median household income is reported in nominal dollars.",
+    "      \\item \\textit{Note:} This table reports the median of each HSA-level community characteristic for odd-numbered years from 2011 through 2023, computed across all HSAs in the national sample. Socioeconomic and demographic characteristics are aggregated from ZCTAs to HSAs using variable-specific population denominators: the non-institutionalized population for insurance coverage, the civilian labor force for unemployment, the population aged 25 years and older for educational attainment, and the population for whom poverty status was determined for poverty. Median household income and the social deprivation index are weighted by total population. Median household income is reported in nominal dollars.",
     "      \\item Certified beds per 1,000 residents uses the prior calendar year's certified bed count and is available from 2010 onward. Population denominators are lagged ACS 5-year estimates from 2012 onward; for 2010 and 2011 the denominator is the 2010 Decennial Census population, and the 2010 value pairs 2009 beds with the contemporaneous (non-lagged) 2010 Census population because no 2009 population source exists. Blank entries throughout indicate years in which data are unavailable due to ACS coverage limitations. Population density is measured as persons per square mile.",
+    "      \\item Income and population-density medians exclude nonpositive values.",
     "    \\end{tablenotes}",
     "\\end{threeparttable}"
   )

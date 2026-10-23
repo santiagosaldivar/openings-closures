@@ -1,0 +1,11 @@
+stage,event_type,n
+Curated events,Closure,320
+Curated events,Opening,175
+Exact event-year match in raw POS,Closure,319
+Exact event-year match in raw POS,Opening,140
+After specialty and year filters,Closure,319
+After specialty and year filters,Opening,140
+After ownership/control filter,Closure,301
+After ownership/control filter,Opening,137
+After manual exclusions: characteristics table,Closure,301
+After manual exclusions: characteristics table,Opening,137

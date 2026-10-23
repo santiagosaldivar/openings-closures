@@ -22,5 +22,13 @@ data/
 
 # Keep optional placeholder files if you add them
 !data/**/.gitkeep
-checks/
+# Keep this reproducible audit and its aggregate counts; hospital-level
+# diagnostics and other checks remain local.
+checks/*
+!checks/audit_pos_event_attrition.R
+!checks/output/
+checks/output/*
+!checks/output/pos_event_attrition_stages.csv
+!checks/output/pos_event_attrition_reasons.csv
+!checks/output/pos_event_attrition_opening_gaps.csv
 cleaning/99_compare_ntl_hsa_percentiles_versions.R

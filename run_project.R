@@ -195,7 +195,7 @@ if (exists("run_hospital_characteristics")) {
   run_hospital_characteristics(
     openings_path = "data/interim/openings_clean.csv",
     closures_path = "data/interim/closures_clean.csv",
-    pos_path = "data/processed/pos_panel_updated.csv",
+    pos_path = "data/processed/pos_panel_reconciled.csv",
     out_tex = "outputs/tables/hospital_characteristics.tex",
     out_tex_sensitivity = "outputs/tables/hospital_characteristics_sensitivity.tex",
     out_counts_csv = "outputs/tables/hospital_group_counts.csv",
@@ -400,12 +400,8 @@ if (exists("run_popchange_decile_events")) {
   message("Skipping population-change decile event chart (run_popchange_decile_events() not found).")
 }
 
-# 3) Manuscript staging (runs last so all figures/tables above are current)
-if (exists("stage_manuscript_outputs")) {
-  message("Staging manuscript-ready figures and tables...")
-  stage_manuscript_outputs(dest_dir = "outputs/manuscript")
-} else {
-  message("Skipping manuscript staging (stage_manuscript_outputs() not found).")
-}
+# 3) Manuscript claims and LaTeX/PDF bundles (after all figures/tables are current)
+run_all_manuscript_claims()
+run_manuscript_documents()
 
 message("Pipeline finished.")

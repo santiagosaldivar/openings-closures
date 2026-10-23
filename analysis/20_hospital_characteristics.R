@@ -1,24 +1,103 @@
-# Create hospital characteristics summary table comparing openings vs closures.
-# Usage: source("R/analysis/20_hospital_characteristics.R"); run_hospital_characteristics()
+# Hospital-year characteristics, with and without hospital ZIP rural location.
+# Usage: source("analysis/20_hospital_characteristics.R"); run_hospital_characteristics()
 
+# Optional project-local dependencies (git-ignored).
+if (dir.exists(".Rlibs")) .libPaths(c(normalizePath(".Rlibs"), .libPaths()))
 suppressPackageStartupMessages({
   library(dplyr)
   library(readr)
-  library(kableExtra)
-  library(rlang)
-  library(tidyr)
-  library(sandwich)
-  library(lmtest)
 })
+source("analysis/hospital_characteristics_notes.R")
 
-#' Build hospital characteristics table
-#'
-#' @param openings_path Clean openings CSV (default "data/interim/openings_clean.csv")
-#' @param closures_path Clean closures CSV (default "data/interim/closures_clean.csv")
-#' @param pos_path Cleaned POS panel CSV (default "data/processed/pos_panel_updated.csv")
-#' @param out_tex Output TeX path (default "outputs/tables/hospital_characteristics.tex")
-#' @param out_counts_csv Output CSV path for hospital group counts and union total
-#' @return final summary dataframe (invisible)
+hc_group_levels <- c("Closures", "Openings", "Non-event")
+hc_ownership_levels <- c("For-profit", "Nonprofit", "Public")
+hc_teaching_levels <- c("Major affiliation", "Graduate-school affiliation",
+                        "Limited affiliation", "No affiliation")
+
+hc_zip5 <- function(x) {
+  x <- trimws(as.character(x))
+  valid <- !is.na(x) & grepl("^[0-9]{1,5}$", x)
+  out <- rep(NA_character_, length(x))
+  out[valid] <- sprintf("%05d", as.integer(x[valid]))
+  out
+}
+
+hc_ruca_lookup <- function(path) {
+  lookup <- readxl::read_excel(path, sheet = "Data") %>%
+    transmute(zip5 = hc_zip5(ZIP_CODE), rural_small_town = case_when(
+      RUCA1 %in% 7:10 ~ 1L,
+      RUCA1 %in% 1:6 ~ 0L,
+      TRUE ~ NA_integer_
+    )) %>% filter(!is.na(zip5)) %>% distinct()
+  if (anyDuplicated(lookup$zip5)) stop("Conflicting RUCA assignments for a ZIP.")
+  lookup
+}
+
+# CCN is the cluster across years AND groups. Unit weights preserve the
+# displayed hospital-year proportions. The F statistic is the second-order
+# Rao-Scott correction, not the unadjusted Pearson chi-square statistic.
+hc_overall_test <- function(data, variable, categorical = TRUE) {
+  dat <- data %>% transmute(ccn, group, value = .data[[variable]]) %>% filter(!is.na(value))
+  dat$group <- factor(dat$group, levels = hc_group_levels)
+  result <- tibble::tibble(
+    key = variable,
+    method = if (categorical) "Rao-Scott second-order F" else "Hospital-clustered Wald F (HC1)",
+    statistic = NA_real_, df_num = NA_real_, df_den = NA_real_, p_value = NA_real_,
+    n_observations = nrow(dat), n_clusters = n_distinct(dat$ccn),
+    pearson_chisq_unadjusted = NA_real_, min_expected_count = NA_real_,
+    cells_expected_below_5 = NA_integer_, n_cells = NA_integer_, status = "ok"
+  )
+  if (any(table(dat$group) == 0) || result$n_clusters < 3L) {
+    result$status <- "Not estimable: missing group or fewer than three hospitals"
+    return(result)
+  }
+  if (categorical) {
+    dat$value <- droplevels(factor(dat$value))
+    if (nlevels(dat$value) < 2L) {
+      result$status <- "Not estimable: fewer than two observed categories"
+      return(result)
+    }
+    cells <- table(dat$group, dat$value)
+    expected <- outer(rowSums(cells), colSums(cells)) / sum(cells)
+    result$pearson_chisq_unadjusted <- sum((cells - expected)^2 / expected)
+    result$min_expected_count <- min(expected)
+    result$cells_expected_below_5 <- sum(expected < 5)
+    result$n_cells <- length(cells)
+    design <- survey::svydesign(ids = ~ccn, weights = ~1, data = dat)
+    test <- survey::svychisq(~group + value, design, statistic = "F")
+    result$statistic <- unname(test$statistic)
+    result$df_num <- unname(test$parameter["ndf"])
+    result$df_den <- unname(test$parameter["ddf"])
+    result$p_value <- test$p.value
+  } else {
+    fit <- lm(value ~ group, data = dat)
+    covariance <- sandwich::vcovCL(fit, cluster = dat$ccn, type = "HC1", cadjust = TRUE)
+    beta <- coef(fit)[-1L]
+    covariance <- covariance[-1L, -1L, drop = FALSE]
+    q <- length(beta)
+    if (any(!is.finite(covariance)) || qr(covariance)$rank < q) {
+      result$status <- "Not estimable: singular clustered covariance"
+      return(result)
+    }
+    result$statistic <- as.numeric(crossprod(beta, solve(covariance, beta))) / q
+    result$df_num <- q
+    result$df_den <- result$n_clusters - 1L
+    result$p_value <- pf(result$statistic, q, result$df_den, lower.tail = FALSE)
+  }
+  if (!is.finite(result$p_value) || !is.finite(result$statistic)) {
+    stop("Non-finite overall test for ", variable, "; inspect category counts and clusters.")
+  }
+  result
+}
+
+hc_fmt_p <- function(p) {
+  if (is.na(p)) return("---")
+  if (p < 0.001) "<0.001" else sprintf("%.3f", p)
+}
+
+#' Generate main and year-weighted sensitivity tables, each with/without rural location.
+#' The existing main filename remains the version without rural location.
+#' Default POS input matches the explicit input used by run_project.R.
 run_hospital_characteristics <- function(
   openings_path = "data/interim/openings_clean.csv",
   closures_path = "data/interim/closures_clean.csv",
@@ -26,570 +105,309 @@ run_hospital_characteristics <- function(
   out_tex = "outputs/tables/hospital_characteristics.tex",
   out_tex_sensitivity = "outputs/tables/hospital_characteristics_sensitivity.tex",
   out_counts_csv = "outputs/tables/hospital_group_counts.csv",
-  out_tests_csv = "outputs/tables/hospital_characteristics_tests.csv"
+  out_tests_csv = "outputs/tables/hospital_characteristics_tests.csv",
+  ruca_path = "data/raw/RUCA2010zipcode.xlsx",
+  out_tex_with_rural = sub("\\.tex$", "_with_rural.tex", out_tex),
+  out_tex_sensitivity_with_rural = sub("\\.tex$", "_with_rural.tex", out_tex_sensitivity),
+  out_diagnostics_csv = file.path(dirname(out_tex), "hospital_characteristics_denominators.csv"),
+  out_cells_csv = file.path(dirname(out_tex), "hospital_characteristics_cells.csv"),
+  out_methods_md = file.path(dirname(out_tex), "hospital_characteristics_methods.md"),
+  raw_pos_path = "data/raw/pos_panel_2009_2024.dta",
+  include_names_path = "data/raw/pos_do_not_exclude.csv",
+  exclude_names_path = "data/raw/POS_double_checking_exclude.csv",
+  out_coverage_csv = file.path(dirname(out_tex), "hospital_characteristics_event_coverage.csv")
 ) {
-  if (!file.exists(openings_path)) stop("Openings file not found: ", openings_path)
-  if (!file.exists(closures_path)) stop("Closures file not found: ", closures_path)
-  if (!file.exists(pos_path)) stop("POS panel not found: ", pos_path)
-
-  openings <- read_csv(openings_path, show_col_types = FALSE)
-  closures <- read_csv(closures_path, show_col_types = FALSE)
-  pos_panel_updated <- read_csv(pos_path, show_col_types = FALSE) %>%
-    # The POS panel now includes 2009 solely as a lag source for the 2010
-    # beds-per-1000 value (see 02_clean_pos.R). It must not enter any
-    # analysis sample; this table covers 2010-2023.
-    filter(between(year, 2010, 2023))
-
-  openings <- openings %>%
-    select(opening, ccn, part_year)
-
-  closures <- closures %>%
-    select(closure, ccn, term_year)
-
-  closed_short_lived <- pos_panel_updated %>%
-    filter(!is.na(term_year)) %>%
-    group_by(ccn) %>%
-    summarize(
-      start_yr = min(part_year, na.rm = TRUE),
-      end_yr = max(term_year, na.rm = TRUE),
-      duration = end_yr - start_yr,
-      partdate = min(partdate),
-      termdate = min(termdate),
-      .groups = "drop"
-    ) %>%
-    filter(duration <= 1)
-
-  pos_panel_updated <- merge(pos_panel_updated, openings, by.x = c("ccn", "year"), by.y = c("ccn", "part_year"), all.x = TRUE)
-  pos_panel_updated <- merge(pos_panel_updated, closures, by.x = c("ccn", "year"), by.y = c("ccn", "term_year"), all.x = TRUE)
-# CHECK THE LINE BELOW
-  panel_wo_events <- subset(
-    pos_panel_updated,
-    (opening != 1 | is.na(opening)) &
-      (closure != 1 | is.na(closure)) &
-      (is.na(certbeds) | certbeds > 1)
+  for (package in c("survey", "sandwich", "readxl", "haven")) {
+    if (!requireNamespace(package, quietly = TRUE)) stop("Install required R package: ", package)
+  }
+  for (path in c(openings_path, closures_path, pos_path, ruca_path,
+                 raw_pos_path, include_names_path, exclude_names_path)) {
+    if (!file.exists(path)) stop("Input not found: ", path)
+  }
+  read_panel <- function(path) read_csv(path, show_col_types = FALSE,
+                                      col_types = cols(ccn = col_character()))
+  openings <- read_panel(openings_path) %>%
+    filter(opening == 1) %>% transmute(ccn, year = part_year, opening = 1L)
+  closures <- read_panel(closures_path) %>%
+    filter(closure == 1) %>% transmute(ccn, year = term_year, closure = 1L)
+  # 2009 exists upstream only for lagged beds, not as a study observation year.
+  panel <- read_panel(pos_path) %>% filter(between(year, 2010, 2023))
+  for (df in list(panel, openings, closures)) {
+    if (anyNA(df$ccn) || anyNA(df$year) || anyDuplicated(df[c("ccn", "year")])) {
+      stop("Inputs must have unique, nonmissing CCN/year keys.")
+    }
+  }
+  if (any(!is.na(panel$control) & !panel$control %in% c(1, 2, 4:9))) {
+    stop("Unexpected ownership code in cleaned analysis panel.")
+  }
+  if (any(!is.na(panel$medschool) & !panel$medschool %in% 1:4)) {
+    stop("Unexpected medical-school affiliation code in analysis panel.")
+  }
+  # Derive the note from this run's inputs, never from saved historical counts.
+  coverage <- hc_event_coverage(
+    openings, closures, panel, haven::read_dta(raw_pos_path),
+    include_names = read_csv(include_names_path, show_col_types = FALSE)$Name,
+    exclude_names = read_csv(exclude_names_path, show_col_types = FALSE)$name
   )
-
-  panel_openings <- subset(pos_panel_updated, opening == 1)
-  panel_closures <- subset(pos_panel_updated, closure == 1)
-
-  calculate_yearly_event_weights <- function(event_df) {
-    total_overall_ccns <- event_df %>%
-      summarise(overall_distinct_ccns = n_distinct(ccn)) %>%
-      pull(overall_distinct_ccns)
-
-    event_df %>%
-      group_by(year) %>%
-      summarise(distinct_ccns_in_year = n_distinct(ccn), .groups = "drop") %>%
-      mutate(weight = distinct_ccns_in_year / total_overall_ccns) %>%
-      select(year, weight)
+  coverage$counts <- coverage$counts %>% mutate(
+    pos_input_md5 = unname(tools::md5sum(pos_path)),
+    raw_pos_input_md5 = unname(tools::md5sum(raw_pos_path)),
+    openings_input_md5 = unname(tools::md5sum(openings_path)),
+    closures_input_md5 = unname(tools::md5sum(closures_path)),
+    include_names_input_md5 = unname(tools::md5sum(include_names_path)),
+    exclude_names_input_md5 = unname(tools::md5sum(exclude_names_path))
+  )
+  panel <- panel %>% left_join(openings, by = c("ccn", "year")) %>%
+    left_join(closures, by = c("ccn", "year"))
+  if (any(panel$opening == 1 & panel$closure == 1, na.rm = TRUE)) {
+    stop("A hospital-year has both events; resolve its group before an omnibus test.")
   }
-
-  analyze_binary_variable <- function(var_name_string, var_col_sym, binary_value, panel_df, event_df, yearly_event_weights_df, event_type_string) {
-    national_yearly_stats <- panel_df %>%
-      filter(active == 1) %>%
-      filter(!is.na(!!var_col_sym)) %>%
-      group_by(year) %>%
-      summarise(
-        yearly_pct = (sum(!!var_col_sym %in% binary_value, na.rm = TRUE) / n()) * 100,
-        n_in_year = n(),
-        .groups = "drop"
-      )
-
-    total_national_obs <- sum(national_yearly_stats$n_in_year)
-
-    national_average_value <- national_yearly_stats %>%
-      left_join(yearly_event_weights_df, by = "year") %>%
-      mutate(weight = coalesce(weight, 0)) %>%
-      summarise(weighted_avg = sum(yearly_pct * weight)) %>%
-      pull(weighted_avg)
-
-    overall_event_calc <- event_df %>%
-      filter(!is.na(!!var_col_sym)) %>%
-      summarise(
-        overall_average = mean(!!var_col_sym %in% binary_value, na.rm = TRUE) * 100,
-        total_distinct_event_ccns = n_distinct(ccn),
-        .groups = "drop"
-      )
-
-    national_avg_col_name <- paste0(event_type_string, "_National_Average")
-    overall_value_col_name <- paste0(event_type_string, "_Overall_Value")
-    hospitals_nat_count_col_name <- paste0(event_type_string, "_Hospitals_National_Count")
-    hospitals_event_count_col_name <- paste0(event_type_string, "_Hospitals_Event_Count")
-
-    result_df <- data.frame(Variable = var_name_string)
-    result_df[[national_avg_col_name]] <- national_average_value
-    result_df[[overall_value_col_name]] <- overall_event_calc$overall_average
-    result_df[[hospitals_nat_count_col_name]] <- total_national_obs
-    result_df[[hospitals_event_count_col_name]] <- overall_event_calc$total_distinct_event_ccns
-    result_df
-  }
-
-  analyze_continuous_variable <- function(var_name_string, var_col_sym, panel_df, event_df, yearly_event_weights_df, event_type_string) {
-    national_yearly_stats <- panel_df %>%
-      filter(active == 1) %>%
-      filter(!is.na(!!var_col_sym)) %>%
-      group_by(year) %>%
-      summarise(
-        yearly_mean = mean(!!var_col_sym, na.rm = TRUE),
-        n_in_year = n(),
-        .groups = "drop"
-      )
-
-    total_national_obs <- sum(national_yearly_stats$n_in_year)
-
-    national_average_value <- national_yearly_stats %>%
-      left_join(yearly_event_weights_df, by = "year") %>%
-      mutate(weight = coalesce(weight, 0)) %>%
-      summarise(weighted_avg = sum(yearly_mean * weight)) %>%
-      pull(weighted_avg)
-
-    overall_event_calc <- event_df %>%
-      filter(!is.na(!!var_col_sym)) %>%
-      summarise(
-        overall_average = mean(!!var_col_sym, na.rm = TRUE),
-        total_distinct_event_ccns = n_distinct(ccn),
-        .groups = "drop"
-      )
-
-    national_avg_col_name <- paste0(event_type_string, "_National_Average")
-    overall_value_col_name <- paste0(event_type_string, "_Overall_Value")
-    hospitals_nat_count_col_name <- paste0(event_type_string, "_Hospitals_National_Count")
-    hospitals_event_count_col_name <- paste0(event_type_string, "_Hospitals_Event_Count")
-
-    result_df <- data.frame(Variable = var_name_string)
-    result_df[[national_avg_col_name]] <- national_average_value
-    result_df[[overall_value_col_name]] <- overall_event_calc$overall_average
-    result_df[[hospitals_nat_count_col_name]] <- total_national_obs
-    result_df[[hospitals_event_count_col_name]] <- overall_event_calc$total_distinct_event_ccns
-    result_df
-  }
-
-  yearly_openings_weights <- calculate_yearly_event_weights(panel_openings)
-  yearly_closures_weights <- calculate_yearly_event_weights(panel_closures)
-
-  active_hospitals <- subset(panel_wo_events, panel_wo_events$active == 1)
-  all_active_hospitals <- subset(pos_panel_updated, pos_panel_updated$active == 1)
-  n_openings <- length(unique(panel_openings$ccn))
-  n_closures <- length(unique(panel_closures$ccn))
-  n_nonevent <- length(unique(active_hospitals$ccn))
-  n_all_active <- length(unique(all_active_hospitals$ccn))
-  total_unique_hospitals <- dplyr::n_distinct(c(
-    panel_openings$ccn,
-    panel_closures$ccn,
-    active_hospitals$ccn
+  panel <- panel %>% mutate(
+    zip5 = hc_zip5(zip5),
+    group = case_when(
+      closure == 1 ~ "Closures",
+      opening == 1 ~ "Openings",
+      active == 1 & (is.na(certbeds) | certbeds > 1) ~ "Non-event",
+      TRUE ~ NA_character_
+    ),
+    group = factor(group, levels = hc_group_levels),
+    ownership = factor(case_when(
+      control %in% c(4, 9) ~ "For-profit",
+      control %in% c(1, 2) ~ "Nonprofit",
+      control %in% 5:8 ~ "Public"
+    ), levels = hc_ownership_levels),
+    # Original exclusive M11 categories, not the nested binary teaching flags.
+    teaching = factor(medschool, levels = c(1, 3, 2, 4), labels = hc_teaching_levels)
+  ) %>% left_join(hc_ruca_lookup(ruca_path), by = "zip5")
+  dat <- panel %>% filter(!is.na(group))
+  counts <- setNames(vapply(hc_group_levels, function(g) {
+    n_distinct(dat$ccn[dat$group == g])
+  }, integer(1)), c("closures", "openings", "non_event_active"))
+  counts <- c(counts, all_active_hospitals = n_distinct(panel$ccn[which(panel$active == 1)]),
+              total_unique_hospitals = n_distinct(dat$ccn))
+  counts_df <- tibble::tibble(metric = names(counts), value = unname(counts), definition = c(
+    "Unique hospitals observed with a closure event in the POS-matched workflow.",
+    "Unique hospitals observed with an opening event in the POS-matched workflow.",
+    "Unique hospitals observed as active in eligible non-event years.",
+    "Unique hospitals observed as active in the cleaned POS panel, regardless of annual event status.",
+    "Unique hospitals across closure, opening, and active non-event observations."
   ))
-
-  counts_df <- tibble::tibble(
-    metric = c(
-      "closures",
-      "openings",
-      "non_event_active",
-      "all_active_hospitals",
-      "total_unique_hospitals"
-    ),
-    value = c(
-      n_closures,
-      n_openings,
-      n_nonevent,
-      n_all_active,
-      total_unique_hospitals
-    ),
-    definition = c(
-      "Unique hospitals observed with a closure event in the POS-matched workflow.",
-      "Unique hospitals observed with an opening event in the POS-matched workflow.",
-      "Unique hospitals observed as active in years without an opening or closure event.",
-      "Unique hospitals observed as active in the cleaned POS panel, regardless of event status in a given year.",
-      "Unique hospitals that opened, closed, or were observed as active in non-event years."
+  specs <- tibble::tribble(
+    ~key, ~section, ~label, ~variable, ~category,
+    "for_profit", "Ownership status (\\%)", "For-profit", "ownership", "For-profit",
+    "non_profit", "Ownership status (\\%)", "Nonprofit", "ownership", "Nonprofit",
+    "public", "Ownership status (\\%)", "Public", "ownership", "Public",
+    "teach_major", "Teaching status (\\%)", "Major affiliation", "teaching", "Major affiliation",
+    "teach_graduate", "Teaching status (\\%)", "Graduate-school affiliation", "teaching", "Graduate-school affiliation",
+    "teach_limited", "Teaching status (\\%)", "Limited affiliation", "teaching", "Limited affiliation",
+    "teach_none", "Teaching status (\\%)", "No affiliation", "teaching", "No affiliation",
+    "rural_small_town", "Location", "Rural or small-town location (\\%)", "rural_small_town", "1",
+    "certbeds", "Capacity", "Certified beds (mean)", "certbeds", NA_character_
+  )
+  group_data <- lapply(hc_group_levels, function(g) filter(dat, group == g))
+  names(group_data) <- hc_group_levels
+  event_weights <- function(g) group_data[[g]] %>% count(year, name = "n_events") %>%
+    mutate(weight = n_events / sum(n_events)) %>% select(year, weight)
+  opening_weights <- event_weights("Openings")
+  closure_weights <- event_weights("Closures")
+  summarize_value <- function(df, variable, category) {
+    x <- df[[variable]]
+    x <- x[!is.na(x)]
+    if (!length(x)) return(NA_real_)
+    if (is.na(category)) mean(x) else mean(as.character(x) == category) * 100
+  }
+  summarize_weighted <- function(variable, category, weights) {
+    yearly <- group_data[["Non-event"]] %>% group_by(year) %>%
+      group_modify(~tibble::tibble(value = summarize_value(.x, variable, category))) %>%
+      ungroup() %>% inner_join(weights, by = "year") %>% filter(!is.na(value))
+    if (!nrow(yearly) || sum(yearly$weight) == 0) return(NA_real_)
+    weighted.mean(yearly$value, yearly$weight)
+  }
+  final_summary_df <- bind_rows(lapply(seq_len(nrow(specs)), function(i) {
+    spec <- specs[i, ]
+    spec %>% mutate(
+      Closures = summarize_value(group_data[["Closures"]], variable, category),
+      Openings = summarize_value(group_data[["Openings"]], variable, category),
+      NonEvent = summarize_value(group_data[["Non-event"]], variable, category),
+      NonEvent_OpeningWeighted = summarize_weighted(variable, category, opening_weights),
+      NonEvent_ClosureWeighted = summarize_weighted(variable, category, closure_weights)
     )
-  )
-
-  variable_specs <- tibble::tribble(
-    ~key, ~section, ~label, ~var_sym, ~is_binary, ~binary_values, ~row_order,
-    "for_profit", "Ownership Status (%)", "For-Profit", quo(control), TRUE, list(c(4, 9)), 1L,
-    "non_profit", "Ownership Status (%)", "Non-Profit", quo(control), TRUE, list(c(1, 2)), 2L,
-    "public", "Ownership Status (%)", "Public", quo(control), TRUE, list(c(5, 6, 7, 8)), 3L,
-    "teach_major", "Teaching Status (%)", "Major Teaching", quo(teach_major), TRUE, list(c(1)), 4L,
-    "teach_majgrad", "Teaching Status (%)", "Graduate Teaching", quo(teach_majgrad), TRUE, list(c(1)), 5L,
-    "certbeds", "Capacity", "Certified Beds (Mean)", quo(certbeds), FALSE, list(NULL), 6L
-  )
-
-  calc_event_overall <- function(df, var_col_sym, is_binary, binary_values = NULL) {
-    df <- df %>% filter(!is.na(!!var_col_sym))
-    if (nrow(df) == 0) return(NA_real_)
-    values <- df %>% pull(!!var_col_sym)
-    if (is_binary) {
-      mean(values %in% binary_values, na.rm = TRUE) * 100
-    } else {
-      mean(values, na.rm = TRUE)
-    }
-  }
-
-  calc_nonevent_overall <- function(df, var_col_sym, is_binary, binary_values = NULL) {
-    valid <- df %>% filter(active == 1, !is.na(!!var_col_sym))
-    if (nrow(valid) == 0) return(NA_real_)
-    if (is_binary) {
-      mean(valid %>% pull(!!var_col_sym) %in% binary_values, na.rm = TRUE) * 100
-    } else {
-      mean(valid %>% pull(!!var_col_sym), na.rm = TRUE)
-    }
-  }
-
-  calc_nonevent_weighted <- function(df, var_col_sym, is_binary, binary_values = NULL, weight_df) {
-    yearly <- df %>%
-      filter(active == 1, !is.na(!!var_col_sym)) %>%
-      group_by(year) %>%
-      summarise(
-        yearly_value = if (is_binary) {
-          mean((!!var_col_sym) %in% binary_values, na.rm = TRUE) * 100
-        } else {
-          mean(!!var_col_sym, na.rm = TRUE)
-        },
-        .groups = "drop"
-      )
-    if (nrow(yearly) == 0) return(NA_real_)
-    yearly %>%
-      left_join(weight_df, by = "year") %>%
-      mutate(weight = coalesce(weight, 0)) %>%
-      summarise(weighted_avg = sum(yearly_value * weight)) %>%
-      pull(weighted_avg)
-  }
-
-  final_summary_df <- variable_specs %>%
-    rowwise() %>%
+  }))
+  variables <- unique(specs$variable)
+  tests_tidy <- bind_rows(lapply(variables, function(v) hc_overall_test(dat, v, v != "certbeds"))) %>%
     mutate(
-      Closures = calc_event_overall(panel_closures, var_sym, is_binary, binary_values[[1]]),
-      Openings = calc_event_overall(panel_openings, var_sym, is_binary, binary_values[[1]]),
-      NonEvent = calc_nonevent_overall(panel_wo_events, var_sym, is_binary, binary_values[[1]]),
-      NonEvent_OpeningWeighted = calc_nonevent_weighted(panel_wo_events, var_sym, is_binary, binary_values[[1]], yearly_openings_weights),
-      NonEvent_ClosureWeighted = calc_nonevent_weighted(panel_wo_events, var_sym, is_binary, binary_values[[1]], yearly_closures_weights)
-    ) %>%
-    ungroup() %>%
-    arrange(row_order)
-  
-  ## ---- Clustered difference-in-means tests --------------------------------
-  ## Each characteristic is compared between an event group (openings or
-  ## closures) and the non-event baseline via lm(outcome ~ event_indicator)
-  ## with SEs clustered by hospital (ccn, CR1). The indicator coefficient is
-  ## the event-minus-non-event difference, so the group means implied by each
-  ## regression equal the means tabulated above. Event side carries no active
-  ## filter (matches calc_event_overall); non-event side is active == 1 from
-  ## panel_wo_events (matches calc_nonevent_overall).
-  nonevent_active <- panel_wo_events %>% filter(active == 1)
-  
-  run_clustered_diff <- function(event_df, nonevent_df, var_col_sym,
-                                 is_binary, binary_values = NULL) {
-    build_group <- function(df, grp) {
-      df <- df %>% filter(!is.na(!!var_col_sym))
-      vals <- df %>% pull(!!var_col_sym)
-      y <- if (is_binary) as.numeric(vals %in% binary_values) * 100 else as.numeric(vals)
-      tibble::tibble(ccn = df$ccn, y = y, group = grp)
+      pos_input_path = pos_path, pos_input_md5 = unname(tools::md5sum(pos_path)),
+      openings_input_md5 = unname(tools::md5sum(openings_path)),
+      closures_input_md5 = unname(tools::md5sum(closures_path))
+    )
+  diagnostics <- bind_rows(lapply(variables, function(v) {
+    dat %>% group_by(group, .drop = FALSE) %>% summarise(
+      characteristic = v, hospital_years = n(), unique_hospitals = n_distinct(ccn),
+      nonmissing_hospital_years = sum(!is.na(.data[[v]])),
+      missing_hospital_years = sum(is.na(.data[[v]])),
+      nonmissing_unique_hospitals = n_distinct(ccn[!is.na(.data[[v]])]), .groups = "drop"
+    )
+  }))
+  cells <- bind_rows(lapply(setdiff(variables, "certbeds"), function(v) {
+    observed <- dat %>% filter(!is.na(.data[[v]]))
+    tab <- table(observed$group, observed[[v]])
+    expected <- outer(rowSums(tab), colSums(tab)) / sum(tab)
+    out <- as.data.frame(tab, stringsAsFactors = FALSE)
+    names(out) <- c("group", "category", "observed")
+    out$expected_under_independence <- as.vector(expected)
+    out$characteristic <- v
+    out
+  }))
+  teaching_methods <- paste(
+    "Teaching status uses mutually exclusive CMS medical-school affiliation categories (M11):",
+    "major (code 1), graduate school (code 3), limited (code 2), and no affiliation (code 4).",
+    "Graduate-school affiliation denotes the most extensive involvement, typically a hospital",
+    "and medical school within a university academic medical center; major denotes the next",
+    "level of involvement in affiliated graduate medical education (physician residency training)."
+  )
+  base_methods <- paste(
+    "Hospital-year observations are grouped by annual event status in 2010--2023.",
+    "Opening and closure characteristics are measured in the event year; non-event observations",
+    "are active hospital-years without either event, excluding records with 1 or fewer certified beds.",
+    "Header N values count unique hospitals within each group; a hospital may appear in multiple",
+    "groups across years. Percentages and mean beds use available hospital-year observations",
+    "for each characteristic; missing values are excluded only from that characteristic.", teaching_methods
+  )
+  base_note <- paste(
+    "Header N counts unique hospitals; hospitals may contribute to multiple groups.",
+    "Percentages and mean beds summarize hospital-years, excluding missing values by characteristic.",
+    "Event characteristics use the event year; non-event observations are active years without",
+    "either event, excluding records with 1 or fewer certified beds.", coverage$note,
+    "Teaching categories are mutually exclusive CMS medical-school affiliations."
+  )
+  rural_note <- paste(
+    "Rural or small-town location uses the hospital's recorded ZIP and the 2010 ZIP RUCA",
+    "classification: primary codes 7--10 versus metropolitan/micropolitan codes 1--6.",
+    "Unmatched or unclassified ZIPs are excluded from the location percentage and test."
+  )
+  rural_missing <- diagnostics %>% filter(characteristic == "rural_small_town")
+  rural_missing_note <- paste0(
+    "Location is missing for ", paste(rural_missing$missing_hospital_years, collapse = "/"),
+    " of ", paste(rural_missing$hospital_years, collapse = "/"),
+    " hospital-year observations (closures/openings/non-event)."
+  )
+  test_methods <- paste(
+    "Overall P-values compare all three groups: hospital-clustered, second-order Rao--Scott",
+    "tests (F approximation) for categorical characteristics and a hospital-clustered Wald F",
+    "test of equal mean certified beds (HC1 covariance; denominator degrees of freedom =",
+    "number of hospitals minus 1). One P-value applies to each complete ownership or teaching block.",
+    "Tests are unadjusted for other covariates and multiple testing; they do not identify which pair differs."
+  )
+  test_note <- paste(
+    "Overall P-values compare all three groups using hospital-clustered second-order Rao--Scott",
+    "F tests for categorical blocks and a Wald F test (HC1) for mean beds;",
+    "tests are unadjusted for covariates and multiple comparisons."
+  )
+  sensitivity_note <- paste(
+    "The two non-event columns summarize the same eligible hospitals, weighting annual",
+    "non-event means by the distribution of opening or closure event years, respectively.",
+    "Weights are normalized over years with an available characteristic.",
+    "These are descriptive sensitivity summaries; the main-table tests do not apply to these weighted columns."
+  )
+  get_p <- function(v) paste0("$", hc_fmt_p(tests_tidy$p_value[match(v, tests_tidy$key)]), "$")
+  fmt <- function(x) if (is.na(x)) "{---}" else sprintf("%.1f", x)
+  render_table <- function(include_rural = FALSE, sensitivity = FALSE) {
+    rows <- final_summary_df
+    if (!include_rural) rows <- rows %>% filter(variable != "rural_small_town")
+    body <- character()
+    for (section_name in unique(rows$section)) {
+      section_rows <- rows %>% filter(section == section_name)
+      block <- section_rows$variable[[1]] %in% c("ownership", "teaching")
+      section_p <- if (!sensitivity && block) get_p(section_rows$variable[[1]]) else ""
+      body <- c(body, if (length(body)) "\\addlinespace" else character(),
+                sprintf("\\multicolumn{4}{l}{\\textbf{%s}} & %s \\\\", section_name, section_p))
+      for (i in seq_len(nrow(section_rows))) {
+        row <- section_rows[i, ]
+        values <- if (sensitivity) {
+          c(row$Closures, row$Openings, row$NonEvent_OpeningWeighted, row$NonEvent_ClosureWeighted)
+        } else c(row$Closures, row$Openings, row$NonEvent)
+        values <- vapply(values, fmt, character(1))
+        if (!sensitivity) values <- c(values, if (block) "" else get_p(row$variable))
+        body <- c(body, paste0("\\hspace{3mm} ", row$label, " & ",
+                              paste(values, collapse = " & "), " \\\\"))
+      }
     }
-    ev <- build_group(event_df, 1L)
-    ne <- build_group(nonevent_df, 0L)
-    if (nrow(ev) == 0L || nrow(ne) == 0L) {
-      return(tibble::tibble(
-        estimate = NA_real_, se = NA_real_, t = NA_real_, df = NA_real_,
-        p_value = NA_real_, ci_low = NA_real_, ci_high = NA_real_,
-        n_event = nrow(ev), n_nonevent = nrow(ne), n_clusters = NA_integer_
-      ))
-    }
-    dat <- dplyr::bind_rows(ev, ne)
-    fit <- lm(y ~ group, data = dat)
-    vc  <- sandwich::vcovCL(fit, cluster = dat$ccn, type = "HC1", cadjust = TRUE)
-    G   <- dplyr::n_distinct(dat$ccn)
-    ct  <- lmtest::coeftest(fit, vcov. = vc, df = G - 1L)
-    est <- ct["group", "Estimate"]
-    se  <- ct["group", "Std. Error"]
-    tcrit <- qt(0.975, df = G - 1L)
-    tibble::tibble(
-      estimate   = est,
-      se         = se,
-      t          = ct["group", "t value"],
-      df         = G - 1L,
-      p_value    = ct["group", "Pr(>|t|)"],
-      ci_low     = est - tcrit * se,
-      ci_high    = est + tcrit * se,
-      n_event    = nrow(ev),
-      n_nonevent = nrow(ne),
-      n_clusters = G
+    headers <- if (sensitivity) {
+      c("Characteristic", "Closures", "Openings", "\\shortstack{Opening-weighted\\\\non-event}",
+        "\\shortstack{Closure-weighted\\\\non-event}")
+    } else c("Characteristic", "Closures", "Openings", "Non-event", "\\shortstack{Overall\\\\$P$-value}")
+    header <- paste(c(headers[1], paste0("\\multicolumn{1}{c}{", headers[-1], "}")), collapse = " & ")
+    ns <- c(counts[["closures"]], counts[["openings"]], counts[["non_event_active"]])
+    if (sensitivity) ns <- c(ns, counts[["non_event_active"]])
+    nrow_tex <- paste(c("", paste0("{(N = ", format(ns, big.mark = ",", trim = TRUE), ")}"),
+                       if (!sensitivity) "" else character()), collapse = " & ")
+    note <- paste(c(base_note,
+                    if (include_rural) paste(rural_note, rural_missing_note),
+                    if (sensitivity) sensitivity_note else test_note), collapse = " ")
+    caption <- if (sensitivity) {
+      "Hospital Characteristics with Alternative Non-event Year Weighting, 2010--2023"
+    } else "Characteristics of Hospitals by Annual Event Status, 2010--2023"
+    c(
+      "\\documentclass[border=10pt]{standalone}", "\\usepackage{booktabs,siunitx,caption,array}",
+      "\\begin{document}", "\\begin{minipage}{8in}", "\\centering",
+      # Keep caption settings in the body so they survive standalone inclusion.
+      "\\renewcommand{\\tablename}{Table}",
+      "\\captionsetup{labelfont=bf,labelsep=period}", "\\setcounter{table}{0}",
+      paste0("\\captionof{table}{", caption, "}"), "\\medskip", "\\setlength{\\tabcolsep}{10pt}",
+      paste0("\\begin{tabular*}{\\linewidth}{@{\\extracolsep{\\fill}}l *{", if (sensitivity) "4" else "3",
+             "}{S[table-format=3.1]}", if (!sensitivity) " c" else "", "@{}}"),
+      "\\toprule", paste0(header, " \\\\"), paste0(nrow_tex, " \\\\"), "\\midrule",
+      body, "\\bottomrule", "\\end{tabular*}", "\\par\\medskip",
+      paste0("{\\footnotesize\\raggedright \\textit{Note:} ", note, "\\par}"),
+      "\\end{minipage}", "\\end{document}"
     )
   }
-  
-  tests_tidy <- variable_specs %>%
-    rowwise() %>%
-    mutate(
-      res = list(dplyr::bind_rows(
-        run_clustered_diff(panel_closures, nonevent_active, var_sym,
-                           is_binary, binary_values[[1]]) %>%
-          mutate(comparison = "closures_vs_nonevent"),
-        run_clustered_diff(panel_openings, nonevent_active, var_sym,
-                           is_binary, binary_values[[1]]) %>%
-          mutate(comparison = "openings_vs_nonevent")
-      ))
-    ) %>%
-    ungroup() %>%
-    select(key, section, label, row_order, res) %>%
-    tidyr::unnest(res) %>%
-    arrange(row_order, comparison) %>%
-    select(key, section, label, comparison, estimate, se, t, df, p_value,
-           ci_low, ci_high, n_event, n_nonevent, n_clusters)
-  
-  fmt_p <- function(p) {
-    if (length(p) == 0 || is.na(p)) return("")
-    if (p < 0.001) "<0.001" else sprintf("%.3f", p)
-  }
-  
-  get_p <- function(lbl, comp) {
-    out <- tests_tidy %>%
-      filter(label == lbl, comparison == comp) %>%
-      pull(p_value)
-    fmt_p(if (length(out) == 0) NA_real_ else out[[1]])
-  }
-
-  # Main table: Closures/Openings/Non-event (single non-event baseline)
-  main_table_df <- final_summary_df %>%
-    transmute(
-      `Hospital Group` = label,
-      Closures = round(Closures, 2),
-      Openings = round(Openings, 2),
-      `Non-event` = round(NonEvent, 2)
-    )
-
-  main_latex <- main_table_df %>%
-    kable(
-      format = "latex",
-      booktabs = TRUE,
-      escape = FALSE,
-      align = "lccc",
-      caption = "Descriptive Characteristics of Hospitals: Openings, Closures, and Non-event Averages, 2010-2023",
-      col.names = c(
-        "Hospital Group",
-        sprintf("\\shortstack{Closures\\\\(N = %s)}", format(n_closures, big.mark = ",")),
-        sprintf("\\shortstack{Openings\\\\(N = %s)}", format(n_openings, big.mark = ",")),
-        sprintf("\\shortstack{Non-event\\\\(N = %s)}", format(n_nonevent, big.mark = ","))
-      )
-    ) %>%
-    pack_rows("Ownership Status (%)", 1, 3, bold = TRUE) %>%
-    pack_rows("Teaching Status (%)", 4, 5, bold = TRUE) %>%
-    pack_rows("Capacity", 6, 6, bold = TRUE) %>%
-    kable_styling(latex_options = c("hold_position")) %>%
-    footnote(
-      general = "This table displays descriptive statistics for hospitals categorized by operational status between 2010 and 2023. \"Openings\" and \"Closures\" are measured in the year of the respective event. The \"Non-event\" group includes active hospitals in years without opening/closure events. Ownership and teaching status are reported as percentages.",
-      general_title = "Note:",
-      footnote_as_chunk = TRUE
-    )
-
-  # Sensitivity table: retain both weighted non-event baselines
-  sensitivity_df <- final_summary_df %>%
-    transmute(
-      `Hospital Group` = label,
-      Closures = round(Closures, 2),
-      Openings = round(Openings, 2),
-      `Non-event (Opening-weighted)` = round(NonEvent_OpeningWeighted, 2),
-      `Non-event (Closure-weighted)` = round(NonEvent_ClosureWeighted, 2)
-    )
-
-  get_val <- function(df, row_label, col_name) {
-    out <- df %>% filter(`Hospital Group` == row_label) %>% pull(all_of(col_name))
-    if (length(out) == 0) return(NA_real_)
-    out[[1]]
-  }
-
-  fmt <- function(x) sprintf("%.2f", x)
-
-  main_body <- c(
-    "\\multicolumn{6}{l}{\\textbf{Ownership Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} For-Profit & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "For-Profit", "Closures")),
-            fmt(get_val(main_table_df, "For-Profit", "Openings")),
-            fmt(get_val(main_table_df, "For-Profit", "Non-event")),
-            get_p("For-Profit", "closures_vs_nonevent"),
-            get_p("For-Profit", "openings_vs_nonevent")),
-    sprintf("\\hspace{3mm} Non-Profit & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "Non-Profit", "Closures")),
-            fmt(get_val(main_table_df, "Non-Profit", "Openings")),
-            fmt(get_val(main_table_df, "Non-Profit", "Non-event")),
-            get_p("Non-Profit", "closures_vs_nonevent"),
-            get_p("Non-Profit", "openings_vs_nonevent")),
-    sprintf("\\hspace{3mm} Public     & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "Public", "Closures")),
-            fmt(get_val(main_table_df, "Public", "Openings")),
-            fmt(get_val(main_table_df, "Public", "Non-event")),
-            get_p("Public", "closures_vs_nonevent"),
-            get_p("Public", "openings_vs_nonevent")),
-    "\\addlinespace",
-    "",
-    "\\multicolumn{6}{l}{\\textbf{Teaching Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} Major Teaching & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "Major Teaching", "Closures")),
-            fmt(get_val(main_table_df, "Major Teaching", "Openings")),
-            fmt(get_val(main_table_df, "Major Teaching", "Non-event")),
-            get_p("Major Teaching", "closures_vs_nonevent"),
-            get_p("Major Teaching", "openings_vs_nonevent")),
-    sprintf("\\hspace{3mm} Graduate Teaching & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "Graduate Teaching", "Closures")),
-            fmt(get_val(main_table_df, "Graduate Teaching", "Openings")),
-            fmt(get_val(main_table_df, "Graduate Teaching", "Non-event")),
-            get_p("Graduate Teaching", "closures_vs_nonevent"),
-            get_p("Graduate Teaching", "openings_vs_nonevent")),
-    "\\addlinespace",
-    "",
-    "\\multicolumn{6}{l}{\\textbf{Capacity}} \\\\",
-    sprintf("\\hspace{3mm} Certified Beds (Mean) & %s & %s & %s & %s & %s \\\\",
-            fmt(get_val(main_table_df, "Certified Beds (Mean)", "Closures")),
-            fmt(get_val(main_table_df, "Certified Beds (Mean)", "Openings")),
-            fmt(get_val(main_table_df, "Certified Beds (Mean)", "Non-event")),
-            get_p("Certified Beds (Mean)", "closures_vs_nonevent"),
-            get_p("Certified Beds (Mean)", "openings_vs_nonevent")))
-
-  main_doc <- c(
-    "\\documentclass[varwidth=9in, border=10pt]{standalone}",
-    "\\usepackage{booktabs}",
-    "\\usepackage{siunitx}",
-    "\\usepackage{caption}",
-    "\\renewcommand{\\tablename}{Exhibit}",
-    "\\usepackage{array}",
-    "",
-    "\\begin{document}",
-    "",
-    "\\centering",
-    "\\setcounter{table}{1}",
-    "\\captionof{table}{Descriptive Characteristics of Hospitals: Openings, Closures, and Non-event Averages, 2010-2023}",
-    "",
-    "\\begin{tabular}{l ",
-    "    S[table-format=3.2] ",
-    "    S[table-format=3.2] ",
-    "    S[table-format=3.2] ",
-    "    c c}",
-    "\\toprule",
-    "Hospital Group & \\multicolumn{1}{c}{Closures} & \\multicolumn{1}{c}{Openings} & \\multicolumn{1}{c}{Non-event} & \\multicolumn{1}{c}{\\shortstack{$P$ vs.\\\\Non-event\\\\(Closures)}} & \\multicolumn{1}{c}{\\shortstack{$P$ vs.\\\\Non-event\\\\(Openings)}} \\\\",
-    sprintf(" & {(N = %s)} & {(N = %s)} & {(N = %s)} & & \\\\",
-            format(n_closures, big.mark = ","), format(n_openings, big.mark = ","), format(n_nonevent, big.mark = ",")),
-    "\\midrule",
-    "",
-    main_body,
-    "",
-    "\\bottomrule",
-    "\\end{tabular}",
-    "",
-    "\\vspace{5pt}",
-    "\\parbox{\\linewidth}{",
-    "    \\footnotesize",
-    "    \\textit{Note:} The table displays descriptive statistics for hospitals categorized by their operational status between 2010 and 2023. Mean values for hospital characteristics are categorized by annual event status. Means corresponding to ``openings'' and ``closures'' are measured in the year of the respective event. The ``Non-event'' group includes all hospitals that did not experience an opening or closure in a given study year. Ownership and teaching status are reported as percentages. $P$-values test the difference in means between each event group and the non-event group, estimated by linear regression of the characteristic on an event indicator with standard errors clustered by hospital. The three ownership categories are mutually exhaustive and therefore linearly dependent, so their $P$-values are not mutually independent.",
-    "}",
-    "",
-    "\\end{document}"
-  )
-
-  sens_body <- c(
-    "\\multicolumn{5}{l}{\\textbf{Ownership Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} For-Profit & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "For-Profit", "Closures")),
-            fmt(get_val(sensitivity_df, "For-Profit", "Openings")),
-            fmt(get_val(sensitivity_df, "For-Profit", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "For-Profit", "Non-event (Closure-weighted)"))),
-    sprintf("\\hspace{3mm} Non-Profit & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "Non-Profit", "Closures")),
-            fmt(get_val(sensitivity_df, "Non-Profit", "Openings")),
-            fmt(get_val(sensitivity_df, "Non-Profit", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "Non-Profit", "Non-event (Closure-weighted)"))),
-    sprintf("\\hspace{3mm} Public     & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "Public", "Closures")),
-            fmt(get_val(sensitivity_df, "Public", "Openings")),
-            fmt(get_val(sensitivity_df, "Public", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "Public", "Non-event (Closure-weighted)"))),
-    "\\addlinespace",
-    "",
-    "\\multicolumn{5}{l}{\\textbf{Teaching Status (\\%)}} \\\\",
-    sprintf("\\hspace{3mm} Major Teaching & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "Major Teaching", "Closures")),
-            fmt(get_val(sensitivity_df, "Major Teaching", "Openings")),
-            fmt(get_val(sensitivity_df, "Major Teaching", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "Major Teaching", "Non-event (Closure-weighted)"))),
-    sprintf("\\hspace{3mm} Graduate Teaching & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "Graduate Teaching", "Closures")),
-            fmt(get_val(sensitivity_df, "Graduate Teaching", "Openings")),
-            fmt(get_val(sensitivity_df, "Graduate Teaching", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "Graduate Teaching", "Non-event (Closure-weighted)"))),
-    "\\addlinespace",
-    "",
-    "\\multicolumn{5}{l}{\\textbf{Capacity}} \\\\",
-    sprintf("\\hspace{3mm} Certified Beds (Mean) & %s & %s & %s & %s \\\\",
-            fmt(get_val(sensitivity_df, "Certified Beds (Mean)", "Closures")),
-            fmt(get_val(sensitivity_df, "Certified Beds (Mean)", "Openings")),
-            fmt(get_val(sensitivity_df, "Certified Beds (Mean)", "Non-event (Opening-weighted)")),
-            fmt(get_val(sensitivity_df, "Certified Beds (Mean)", "Non-event (Closure-weighted)")))
-  )
-
-  sensitivity_doc <- c(
-    "\\documentclass[varwidth=9in, border=10pt]{standalone}",
-    "\\usepackage{booktabs}",
-    "\\usepackage{siunitx}",
-    "\\usepackage{caption}",
-    "\\renewcommand{\\tablename}{Exhibit}",
-    "\\usepackage{array}",
-    "",
-    "\\begin{document}",
-    "",
-    "\\centering",
-    "\\setcounter{table}{1}",
-    "\\captionof{table}{Descriptive Characteristics of Hospitals: Event Groups with Alternative Non-event Weighting, 2010-2023}",
-    "",
-    "\\begin{tabular}{l ",
-    "    S[table-format=3.2] ",
-    "    S[table-format=3.2] ",
-    "    S[table-format=3.2] ",
-    "    S[table-format=3.2]}",
-    "\\toprule",
-    "Hospital Group & \\multicolumn{1}{c}{Closures} & \\multicolumn{1}{c}{Openings} & \\multicolumn{1}{c}{Opening-weighted Non-event} & \\multicolumn{1}{c}{Closure-weighted Non-event} \\\\",
-    sprintf(" & {(N = %s)} & {(N = %s)} & {(N = %s)} & {(N = %s)} \\\\",
-            format(n_closures, big.mark = ","), format(n_openings, big.mark = ","), format(n_nonevent, big.mark = ","), format(n_nonevent, big.mark = ",")),
-    "\\midrule",
-    "",
-    sens_body,
-    "",
-    "\\bottomrule",
-    "\\end{tabular}",
-    "",
-    "\\vspace{5pt}",
-    "\\parbox{\\linewidth}{",
-    "    \\footnotesize",
-    "    \\textit{Note:} The two non-event columns use the same active non-event hospital set and N count but different year-weighting schemes (opening-year vs closure-year event distribution).",
-    "}",
-    "",
-    "\\end{document}"
-  )
-
-  out_dir <- dirname(out_tex)
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-  writeLines(main_doc, out_tex)
-  writeLines(sensitivity_doc, out_tex_sensitivity)
+  outputs <- c(main = out_tex, with_rural = out_tex_with_rural,
+               sensitivity = out_tex_sensitivity, sensitivity_with_rural = out_tex_sensitivity_with_rural,
+               counts_csv = out_counts_csv, tests_csv = out_tests_csv,
+               denominators_csv = out_diagnostics_csv, cells_csv = out_cells_csv,
+               methods_md = out_methods_md, coverage_csv = out_coverage_csv)
+  if (anyDuplicated(outputs)) stop("Output paths must be distinct (use .tex extensions for tables).")
+  for (directory in unique(dirname(outputs))) dir.create(directory, recursive = TRUE, showWarnings = FALSE)
+  writeLines(render_table(), out_tex)
+  writeLines(render_table(include_rural = TRUE), out_tex_with_rural)
+  writeLines(render_table(sensitivity = TRUE), out_tex_sensitivity)
+  writeLines(render_table(include_rural = TRUE, sensitivity = TRUE), out_tex_sensitivity_with_rural)
   write_csv(counts_df, out_counts_csv)
   write_csv(tests_tidy, out_tests_csv)
-
-  message(
-    sprintf(
-      "Hospital group counts used in table headers: Closures=%s, Openings=%s, Non-event(active)=%s, Total unique=%s",
-      n_closures, n_openings, n_nonevent, total_unique_hospitals
-    )
-  )
-
-  invisible(list(
-    summary = final_summary_df,
-    counts = c(
-      closures = n_closures,
-      openings = n_openings,
-      non_event_active = n_nonevent,
-      all_active_hospitals = n_all_active,
-      total_unique_hospitals = total_unique_hospitals
-    ),
-    counts_table = counts_df,
-    tests = tests_tidy,
-    outputs = c(
-      main = out_tex,
-      sensitivity = out_tex_sensitivity,
-      counts_csv = out_counts_csv,
-      tests_csv = out_tests_csv
-    )
-  ))
+  write_csv(diagnostics, out_diagnostics_csv)
+  write_csv(cells, out_cells_csv)
+  write_csv(coverage$counts, out_coverage_csv)
+  writeLines(c(
+    "# Hospital characteristics: manuscript methods", "", "## Text for either table version", "",
+    gsub("--", "-", base_methods, fixed = TRUE), "",
+    gsub("--", "-", test_methods, fixed = TRUE), "",
+    "## Event coverage relative to Figure 1", "", coverage$note, "",
+    "Counts and exclusion reasons are recomputed from the curated event lists, the selected",
+    "analysis panel, and raw POS records at each run. The event-coverage CSV records those",
+    "counts and input hashes. No adjacent-year substitution or CCN reassignment is applied.", "",
+    "## Additional text for the version with rural location", "",
+    gsub("--", "-", paste(rural_note, rural_missing_note), fixed = TRUE), "",
+    "## Supplementary sensitivity table", "", sensitivity_note, "", "## Coding and interpretation", "",
+    "Ownership: for-profit = POS control 4/9; nonprofit = 1/2; public = 5/6/7/8.", "",
+    "The former Graduate Teaching row used teach_majgrad, which combines M11 codes 1 and 3.",
+    "The revised Graduate-school affiliation row uses code 3 alone. The four teaching categories",
+    "are exhaustive among nonmissing M11 records and do not overlap. Limited affiliation is",
+    "retained separately and must not be described as non-teaching. These classifications are",
+    "CMS affiliation categories, not a resident-to-bed ratio or a teaching-association membership measure.", "",
+    paste0("Analysis input: `", pos_path, "`. Both main variants use identical observations for shared characteristics."), "",
+    "The tests CSV contains adjusted F statistics, numerator/denominator degrees of freedom,",
+    "full-precision p-values, and an explicitly labeled unadjusted Pearson statistic for diagnostics.",
+    "The cells and denominators CSVs retain category counts, expected counts, and variable-specific missingness.", "",
+    "## Sources", "",
+    "- [CMS Hospital/CAH Database Worksheet, Exhibit 286, M11 and M13 (2012), PDF pages 3 and 15](https://www.cms.gov/Regulations-and-Guidance/Guidance/Transmittals/Downloads/R80SOMA-.pdf)",
+    "- [R survey: Rao-Scott tests and F approximation](https://search.r-project.org/CRAN/refmans/survey/html/svychisq.html)",
+    "- Local RUCA source: `data/raw/RUCA2010zipcode.xlsx`, sheet `Data`, primary code `RUCA1`; grouping matches `analysis/baseline_urbanicity_split.R`."
+  ), out_methods_md)
+  message("Hospital characteristics: generated both main variants and both sensitivity variants.")
+  message("Unique hospitals: closures=", counts[["closures"]], ", openings=", counts[["openings"]],
+          ", non-event=", counts[["non_event_active"]], ", union=", counts[["total_unique_hospitals"]])
+  invisible(list(summary = final_summary_df, counts = counts, counts_table = counts_df,
+                 tests = tests_tidy, denominators = diagnostics, cells = cells,
+                 coverage = coverage, outputs = outputs))
 }
