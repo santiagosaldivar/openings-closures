@@ -10,7 +10,7 @@ suppressPackageStartupMessages({
 source("analysis/hospital_characteristics_notes.R")
 
 hc_group_levels <- c("Closures", "Openings", "Non-event")
-hc_ownership_levels <- c("For-profit", "Nonprofit", "Public")
+hc_ownership_levels <- c("For-profit", "Nonprofit", "Public", "Other/unspecified")
 hc_teaching_levels <- c("Major affiliation", "Graduate-school affiliation",
                         "Limited affiliation", "No affiliation")
 
@@ -137,7 +137,7 @@ run_hospital_characteristics <- function(
       stop("Inputs must have unique, nonmissing CCN/year keys.")
     }
   }
-  if (any(!is.na(panel$control) & !panel$control %in% c(1, 2, 4:9))) {
+  if (any(!is.na(panel$control) & !panel$control %in% 1:9)) {
     stop("Unexpected ownership code in cleaned analysis panel.")
   }
   if (any(!is.na(panel$medschool) & !panel$medschool %in% 1:4)) {
@@ -174,7 +174,8 @@ run_hospital_characteristics <- function(
     ownership = factor(case_when(
       control %in% c(4, 9) ~ "For-profit",
       control %in% c(1, 2) ~ "Nonprofit",
-      control %in% 5:8 ~ "Public"
+      control %in% 5:8 ~ "Public",
+      control == 3 ~ "Other/unspecified"
     ), levels = hc_ownership_levels),
     # Original exclusive M11 categories, not the nested binary teaching flags.
     teaching = factor(medschool, levels = c(1, 3, 2, 4), labels = hc_teaching_levels)
@@ -197,6 +198,7 @@ run_hospital_characteristics <- function(
     "for_profit", "Ownership status (\\%)", "For-profit", "ownership", "For-profit",
     "non_profit", "Ownership status (\\%)", "Nonprofit", "ownership", "Nonprofit",
     "public", "Ownership status (\\%)", "Public", "ownership", "Public",
+    "other_ownership", "Ownership status (\\%)", "Other/unspecified", "ownership", "Other/unspecified",
     "teach_major", "Teaching status (\\%)", "Major affiliation", "teaching", "Major affiliation",
     "teach_graduate", "Teaching status (\\%)", "Graduate-school affiliation", "teaching", "Graduate-school affiliation",
     "teach_limited", "Teaching status (\\%)", "Limited affiliation", "teaching", "Limited affiliation",
@@ -389,7 +391,7 @@ run_hospital_characteristics <- function(
     "## Additional text for the version with rural location", "",
     gsub("--", "-", paste(rural_note, rural_missing_note), fixed = TRUE), "",
     "## Supplementary sensitivity table", "", sensitivity_note, "", "## Coding and interpretation", "",
-    "Ownership: for-profit = POS control 4/9; nonprofit = 1/2; public = 5/6/7/8.", "",
+    "Ownership: for-profit = POS control 4/9; nonprofit = 1/2; public = 5/6/7/8; other/unspecified = 3 (CMS \"Other\").", "",
     "The former Graduate Teaching row used teach_majgrad, which combines M11 codes 1 and 3.",
     "The revised Graduate-school affiliation row uses code 3 alone. The four teaching categories",
     "are exhaustive among nonmissing M11 records and do not overlap. Limited affiliation is",

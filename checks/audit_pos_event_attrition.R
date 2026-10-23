@@ -30,7 +30,7 @@ after_specialty <- raw %>%
          year = as.integer(year)) %>%
   filter(specialty_hosp != 1, between(year, 2009, 2023))
 after_control <- after_specialty %>%
-  filter(is.na(control) | !(control %in% c(3, 10)))
+  filter(is.na(control) | control != 10)
 rebuilt <- after_control %>%
   filter(!hospname %in% exclude_names, year >= 2010)
 
@@ -78,7 +78,7 @@ audit <- events %>%
       !raw_event_year_present ~ "Event-year row absent from raw POS panel",
       !on_include_name_list & (is.na(raw_event_specialty_hosp) | raw_event_specialty_hosp == 1) ~
         "Removed by specialty hospital filter",
-      raw_event_control %in% c(3, 10) ~ "Removed by ownership/control filter",
+      raw_event_control %in% 10 ~ "Removed by ownership/control filter",
       on_exclude_name_list ~ "Removed by manual hospital-name exclusion list",
       TRUE ~ "Unexplained: review"
     )

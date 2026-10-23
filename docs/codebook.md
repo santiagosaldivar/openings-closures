@@ -23,6 +23,7 @@ observations from the other characteristics.
 | For-profit | POS `control` = 4 or 9 |
 | Nonprofit | POS `control` = 1 or 2 |
 | Public | POS `control` = 5, 6, 7, or 8 |
+| Other/unspecified | POS `control` = 3 (CMS "Other"; retained in the sample since October 2026) |
 | Major affiliation | POS `medschool` / CMS M11 = 1 |
 | Graduate-school affiliation | POS `medschool` / CMS M11 = 3 |
 | Limited affiliation | POS `medschool` / CMS M11 = 2 |

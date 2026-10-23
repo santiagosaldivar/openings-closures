@@ -1,6 +1,6 @@
 # Hospital event counts: figure versus characteristics table
 
-The count discrepancy reflects two additional requirements imposed by the characteristics table, even though events were identified from POS: a hospital must survive POS cleaning and have a record in the exact event year. The figure includes 175 openings and 320 closures, whereas the table includes 137 and 301. Cleaning removes 3 openings and 18 closures because their event-year ownership code is 3 ("other"). Another 35 openings are recorded retrospectively in POS: their opening dates are present, but their first annual observations occur one year later (31 hospitals) or two years later (4 hospitals). One closure, Peach County Hospital, has an identifier absent from the current raw panel. A path forward is to review whether the "other" ownership exclusion is substantively justified, evaluate using the first available POS record within two years for opening characteristics with a sensitivity analysis, and resolve the Peach County identifier. Any resulting sample differences should be stated explicitly in the table and figure notes.
+The count discrepancy reflects two additional requirements imposed by the characteristics table, even though events were identified from POS: a hospital must survive POS cleaning and have a record in the exact event year. The figure includes 175 openings and 320 closures, whereas the table includes 140 and 319. (Before October 2026, cleaning also removed hospital-years with POS ownership code 3, "other," which dropped another 3 openings and 18 closures; code 3 is now retained because CMS documents it only as a residual ownership category and it covers ordinary general acute care hospitals.) Another 35 openings are recorded retrospectively in POS: their opening dates are present, but their first annual observations occur one year later (31 hospitals) or two years later (4 hospitals). One closure, Peach County Hospital, has an identifier absent from the current raw panel. A path forward is to evaluate using the first available POS record within two years for opening characteristics with a sensitivity analysis, and resolve the Peach County identifier. Any resulting sample differences should be stated explicitly in the table and figure notes.
 
 ## Reconciliation
 
@@ -9,10 +9,10 @@ The count discrepancy reflects two additional requirements imposed by the charac
 | Curated events counted in the activity figure | 175 | 320 |
 | Exact CCN/event-year match in raw POS | 140 | 319 |
 | After specialty and year filters | 140 | 319 |
-| After ownership/control filter | 137 | 301 |
-| After manual name exclusions: characteristics table | 137 | 301 |
+| After ownership/control filter | 140 | 319 |
+| After manual name exclusions: characteristics table | 140 | 319 |
 
-Thus, the specialty, year, and manual name exclusions cause no additional loss of these matched events. The ownership filter excludes both codes 3 and 10, but all 21 affected event-year records have code 3. The table matches POS `year` to opening `part_year` or closure `term_year`; identifying an event from a later POS record does not guarantee an annual observation in the event year. For all 35 openings without an event-year observation, the opening year agrees with the `part_year` values in their later raw POS records.
+Thus, the specialty, ownership (tribal, code 10), year, and manual name exclusions cause no additional loss of these matched events. The table matches POS `year` to opening `part_year` or closure `term_year`; identifying an event from a later POS record does not guarantee an annual observation in the event year. For all 35 openings without an event-year observation, the opening year agrees with the `part_year` values in their later raw POS records.
 
 Peach County Hospital's curated closure uses CCN `110009`. That identifier is absent from the current raw POS panel, which contains related Peach hospital names under `111310`. This is a candidate identifier issue, not a verified correction.
 

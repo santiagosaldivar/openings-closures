@@ -41,7 +41,7 @@ run_manuscript_hospital_claims <- function(
     dat <- read_input(path) %>% filter(year %in% years)
     unique_keys(dat, c("ccn", "year"), path)
     if (anyNA(dat$active) || !all(dat$active %in% 0:1)) stop("Invalid active flag: ", path)
-    if (any(!is.na(dat$control) & !dat$control %in% c(1, 2, 4:9))) {
+    if (any(!is.na(dat$control) & !dat$control %in% 1:9)) {
       stop("Unexpected ownership code: ", path)
     }
     if (any(!is.na(dat$medschool) & !dat$medschool %in% 1:4)) {
@@ -62,6 +62,7 @@ run_manuscript_hospital_claims <- function(
     "for_profit", "ownership", "For-profit",
     "non_profit", "ownership", "Nonprofit",
     "public", "ownership", "Public",
+    "other_ownership", "ownership", "Other/unspecified",
     "teach_major", "teaching", "Major affiliation",
     "teach_graduate", "teaching", "Graduate-school affiliation",
     "teach_limited", "teaching", "Limited affiliation",
@@ -84,7 +85,8 @@ run_manuscript_hospital_claims <- function(
       ownership = case_when(
         control %in% c(4, 9) ~ "For-profit",
         control %in% c(1, 2) ~ "Nonprofit",
-        control %in% 5:8 ~ "Public"
+        control %in% 5:8 ~ "Public",
+        control == 3 ~ "Other/unspecified"
       ),
       teaching = case_when(
         medschool == 1 ~ "Major affiliation",

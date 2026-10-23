@@ -1,7 +1,5 @@
 event_type,reason,n
 Closure,CCN absent from raw POS panel,1
-Closure,Removed by ownership/control filter,18
-Closure,Retained in characteristics table,301
+Closure,Retained in characteristics table,319
 Opening,Event-year row absent from raw POS panel,35
-Opening,Removed by ownership/control filter,3
-Opening,Retained in characteristics table,137
+Opening,Retained in characteristics table,140

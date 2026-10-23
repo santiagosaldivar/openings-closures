@@ -66,7 +66,13 @@ clean_pos <- function(
       # downstream consumers filter to 2010+ explicitly.
       between(year, 2009, 2023)
     ) %>%
-    filter(is.na(control) | !(control %in% c(3, 10))) %>%
+    # Exclude tribal hospitals (POS control code 10) only. Code 3 ("Other") is
+    # retained: CMS documents it only as a residual ownership category
+    # ("Other (specify)"; older POS layouts label it "Voluntary Non-Profit -
+    # Other"), and it covers ordinary general acute care hospitals and CAHs.
+    # Hospitals move in and out of code 3 across years, so excluding it
+    # removed hospital-years non-randomly (October 2026 decision).
+    filter(is.na(control) | control != 10) %>%
     anti_join(excluded_hospitals, by = c("hospname" = "name"))
 
   dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)

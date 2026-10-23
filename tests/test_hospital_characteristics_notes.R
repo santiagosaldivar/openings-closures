@@ -38,8 +38,9 @@ stopifnot(identical(result$events$reason,
           !grepl("Exclusions: 0|; 0", result$note),
           !grepl("[%&_#$]", result$note))
 
-# Exclusion precedence follows cleaning. Code 3 is separate from code 10;
-# a specialty override does not override ownership or the manual name list.
+# Exclusion precedence follows cleaning. Code 3 ("other") is retained by
+# cleaning, so it is not an exclusion reason; code 10 (tribal) is. A specialty
+# override does not override the ownership filter or the manual name list.
 ids <- sprintf("%06d", 1:9)
 raw <- raw_rows(ids, rep(2015L, 9),
                 control = c(3, 10, 3, 3, 1, 1, NA, 1, 1),
@@ -52,10 +53,10 @@ result <- hc_event_coverage(events(ids, rep(2015L, 9)), events(), events("000009
                             exclude_names = c("Specialty", "Override ownership",
                                               "Override manual", "Manual", "Included"))
 stopifnot(identical(result$events$reason,
-                    c("other_ownership", "ownership_filter", "specialty_filter",
-                      "other_ownership", "manual_filter", "manual_filter",
+                    c("other_eligibility", "ownership_filter", "specialty_filter",
+                      "manual_filter", "manual_filter", "manual_filter",
                       "specialty_filter", "other_eligibility", "retained")),
-          grepl("2 openings with other ownership", result$note, fixed = TRUE),
+          !grepl("other ownership", result$note, fixed = TRUE),
           grepl("1 opening excluded by the ownership filter (POS control code 10)",
                 result$note, fixed = TRUE),
           grepl("2 openings excluded by the specialty-hospital filter", result$note, fixed = TRUE))

@@ -43,7 +43,6 @@ hc_event_coverage <- function(openings, closures, panel, raw_pos,
   reason <- rep("other_eligibility", nrow(events))
   reason[raw_rows$hospname %in% exclude_names] <- "manual_filter"
   reason[raw_rows$control %in% 10] <- "ownership_filter"
-  reason[raw_rows$control %in% 3] <- "other_ownership"
   reason[specialty_excluded] <- "specialty_filter"
   reason[is.na(raw_index)] <- "absent_event_year"
   reason[!events$ccn %in% raw_pos$ccn] <- "absent_ccn"
@@ -74,7 +73,6 @@ hc_event_coverage <- function(openings, closures, panel, raw_pos,
     "Figure 1 does not require event-year POS records."
   )
   descriptions <- c(
-    other_ownership = "with other ownership",
     ownership_filter = "excluded by the ownership filter (POS control code 10)",
     absent_event_year = "without an event-year record",
     absent_ccn = "with a CCN absent from POS",
